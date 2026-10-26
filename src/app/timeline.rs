@@ -138,11 +138,6 @@ pub enum MarkerPreview {
 }
 
 impl TimelineState {
-    /// Where the playhead goes back to when the marker drag ends.
-    pub fn restore_time(&self) -> Option<f64> {
-        self.restore_time
-    }
-
     /// Show a marker preview without an actual drag (docs screenshots).
     pub(super) fn fake_marker_drag(
         &mut self,

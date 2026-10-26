@@ -18,7 +18,7 @@ The **red line** is the playhead. The **yellow** band and flags (`I` / `O`) are 
 
 ### Thumbnails and individual frames
 
-Right after opening a file, weebshot decodes one picture per keyframe for the whole episode in the
+Right after opening a file, Weebshot decodes one picture per keyframe for the whole episode in the
 background (this takes a few seconds to half a minute). When you zoom in, the visible part is decoded
 in more detail. While a part of the strip is still loading it's shown **dimmed with a spinner**
 (using the nearest picture that's already there), and each real frame **fades in** when it arrives
@@ -46,10 +46,11 @@ so you'll often see the same picture several times in a row:
 | Right-click | Set In/Out here, mark a line, zoom to In/Out, fit |
 
 While you drag a marker, the viewer shows the frame under it — framed in yellow, with a label
-saying which marker it is (**IN POINT**, **OUT POINT** or **MOVING IN → OUT**), its timecode and
-frame number, and where the playhead will return to:
+saying which marker it is (**IN POINT**, **OUT POINT** or **MOVING IN → OUT**) and its timecode
+and frame number. This is only a preview: when you let go, the playhead jumps back to where it
+was before you started dragging.
 
-![Dragging the In point](images/marker-drag.jpg)
+![Dragging the Out point](images/marker-drag.jpg)
 
 While dragging In, Out or the range, edges **snap** to subtitle line starts/ends and chapter
 marks when they get close — hold **Shift** to place them freely. Hovering anywhere shows the time and
@@ -62,7 +63,7 @@ whole file.
 ## Frame-accurate positioning
 
 Everything snaps to frames. Clicking or dragging on the timeline lands on the **start of the
-frame** under the pointer. Scrubbing never queues up: weebshot keeps at most one seek in flight and
+frame** under the pointer. Scrubbing never queues up: Weebshot keeps at most one seek in flight and
 always jumps to where the pointer is *now*. Zoomed out, the preview shows the nearest keyframe while
 you drag (that's much faster) and the exact frame when you let go; zoomed in, every position is exact.
 

@@ -1,7 +1,7 @@
 # Installing & updating
 
 Download the latest version from the
-[Releases page](https://github.com/Melanpan/weebshot/releases/latest). Everything weebshot needs is
+[Releases page](https://github.com/Melanpan/weebshot/releases/latest). Everything Weebshot needs is
 included — the video player (libmpv), ffmpeg for exports, and gifsicle for smaller GIFs.
 
 ## Windows
@@ -34,7 +34,7 @@ There is no build for Intel Macs. The macOS build is newer than the others and l
 
 ## Updates
 
-weebshot checks GitHub for a new version once a day. When there is one, an **Update to …** button
+Weebshot checks GitHub for a new version once a day. When there is one, an **Update to …** button
 appears in the status bar. It opens a window with the release notes and these choices:
 
 - **Update and restart** (Windows, Linux AppImage) — downloads the new version, replaces the

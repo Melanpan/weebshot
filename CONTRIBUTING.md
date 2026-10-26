@@ -1,11 +1,11 @@
-# Contributing to weebshot
+# Contributing to Weebshot
 
 Notes for working on the code. (The user-facing docs live in [`docs/`](docs/) and are built into
 the app's Help window.)
 
 ## Building
 
-See [Building from source](README.md#building-from-source) in the README. While weebshot is running
+See [Building from source](README.md#building-from-source) in the README. While Weebshot is running
 its exe is locked; build into another target directory to keep working:
 `$env:CARGO_TARGET_DIR="target/dev"; cargo build`.
 
@@ -29,7 +29,7 @@ To release:
 1. Bump `version` in `Cargo.toml` and commit.
 2. `git tag v0.2.0 && git push origin main v0.2.0`
 3. Wait for the *Release* workflow; edit the release notes on GitHub if you like. Running copies of
-   weebshot will offer the update within a day (asset names must stay as they are — the updater
+   Weebshot will offer the update within a day (asset names must stay as they are — the updater
    looks for them).
 
 ## How it works
@@ -59,10 +59,11 @@ Source layout:
 what it renders (it doesn't capture the screen):
 
 ```powershell
-cargo run -- --docs-screenshots "C:\videos\episode.mkv" docs/images
+cargo run -- --docs-screenshots "C:\videos\episode.mkv" docs/images --at 4:31.5
 ```
 
-It needs an episode with an English subtitle track, uses default settings (yours are neither read
+`--at <time>` sets the frame shown and the subtitle line the scenes are built around (default: the
+middle of the first readable line about a third in). It needs an episode with an English subtitle track, uses default settings (yours are neither read
 nor changed) and writes its test exports to a temp folder. Rebuild afterwards so the in-app help
 picks up the new images.
 

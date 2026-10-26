@@ -112,7 +112,7 @@ pub fn shortcuts_page(keymap: &Keymap, current: bool) -> String {
         "Your current bindings. Change them in *Options → Shortcuts*."
     } else {
         "Default bindings. Every one can be changed in *Options → Shortcuts*; \
-         the help inside weebshot always shows your current ones."
+         the help inside Weebshot always shows your current ones."
     };
     format!("# Keyboard shortcuts\n\n{intro}\n{}", keymap.markdown())
 }
@@ -125,7 +125,7 @@ impl App {
         let open = super::native_window(
             ctx,
             "docs",
-            "weebshot — Documentation",
+            "Weebshot — Documentation",
             [880.0, 660.0],
             [520.0, 320.0],
             |ui| {
@@ -150,7 +150,7 @@ impl App {
                             }
                         }
                         ui.add_space(12.0);
-                        ui.weak(format!("weebshot {}", env!("CARGO_PKG_VERSION")));
+                        ui.weak(format!("Weebshot {}", env!("CARGO_PKG_VERSION")));
                     });
                 let page = self.ui.docs_page.min(PAGES.len() - 1);
                 let text = if PAGES[page].0 == SHORTCUTS_TITLE {
@@ -189,7 +189,7 @@ impl App {
         let open = super::native_window(
             ctx,
             "about",
-            "About weebshot",
+            "About Weebshot",
             [560.0, 420.0],
             [420.0, 320.0],
             |ui| {
@@ -204,7 +204,7 @@ impl App {
                             ui.add(egui::Image::new(MASCOT_URI).max_height(280.0));
                             ui.add_space(12.0);
                             ui.vertical(|ui| {
-                                ui.heading(format!("weebshot {}", env!("CARGO_PKG_VERSION")));
+                                ui.heading(format!("Weebshot {}", env!("CARGO_PKG_VERSION")));
                                 ui.label("Anime screenshot & clip maker.");
                                 ui.add_space(8.0);
                                 ui.add(

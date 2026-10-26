@@ -79,6 +79,10 @@ impl Scene {
 
 pub struct Script {
     out_dir: PathBuf,
+    /// Time inside the subtitle line to build the scenes around (`--at`).
+    at: Option<f64>,
+    /// Playhead position the scenes use.
+    shown: f64,
     scene: Scene,
     entered: Instant,
     prepared: bool,
@@ -86,9 +90,11 @@ pub struct Script {
 }
 
 impl Script {
-    pub fn new(out_dir: PathBuf) -> Self {
+    pub fn new(out_dir: PathBuf, at: Option<f64>) -> Self {
         Self {
             out_dir,
+            at,
+            shown: 0.0,
             scene: Scene::Load,
             entered: Instant::now(),
             prepared: false,
@@ -194,20 +200,35 @@ impl App {
     }
 
     /// Put In/Out on a readable subtitle line about a third into the episode.
+    /// The subtitle line the scenes are built around: the one at `--at` if given, otherwise
+    /// the first readable line about a third into the episode.
     fn pick_scene_line(&mut self) {
         let d = self.player.duration;
+        let at = self.script.as_ref().and_then(|s| s.at);
         let cue = self.cues.as_ref().and_then(|c| {
-            c.cues
-                .iter()
-                .find(|c| {
+            match at {
+                Some(t) => c
+                    .cues
+                    .iter()
+                    .find(|c| c.start <= t && t < c.end)
+                    .or_else(|| c.cues.iter().find(|c| c.start >= t)),
+                None => c.cues.iter().find(|c| {
                     c.start > d * 0.3 && (18..60).contains(&c.text.len()) && c.end - c.start > 1.5
-                })
-                .cloned()
+                }),
+            }
+            .cloned()
         });
         let (a, b) = cue.map_or((d * 0.3, d * 0.3 + 3.0), |c| (c.start, c.end));
         self.set_range(a, b);
         self.player.set_pause(true);
-        self.player.seek(a + (b - a) * 0.5, true);
+        // With --at, that's also the frame on screen; otherwise the middle of the line.
+        let shown = at
+            .filter(|t| (a..b).contains(t))
+            .unwrap_or(a + (b - a) * 0.5);
+        if let Some(s) = &mut self.script {
+            s.shown = shown;
+        }
+        self.player.seek(shown, true);
     }
 
     fn prepare_scene(&mut self, ctx: &egui::Context, scene: Scene) {
@@ -233,19 +254,20 @@ impl App {
                     .zoom_to(ctx_time - 0.25, ctx_time + 0.25, self.player.duration);
             }
             Scene::MarkerDrag => {
-                // As if the In flag were being dragged: the viewer shows the In frame.
+                // As if the Out flag were being dragged: the viewer shows the Out frame.
                 let mid = (a + b) / 2.0;
                 self.timeline
                     .zoom_to(mid - 30.0, mid + 30.0, self.player.duration);
-                self.player.seek(a, true);
-                self.timeline.fake_marker_drag(
-                    Some(super::timeline::MarkerPreview::In(a)),
-                    Some((a + b) / 2.0),
-                );
+                let out = b - 1.0 / self.player.fps;
+                self.player.seek(out, true);
+                let shown = self.script.as_ref().map_or(mid, |s| s.shown);
+                self.timeline
+                    .fake_marker_drag(Some(super::timeline::MarkerPreview::Out(out)), Some(shown));
             }
             Scene::Gif => {
                 self.timeline.fake_marker_drag(None, None);
-                self.player.seek((a + b) / 2.0, true);
+                let shown = self.script.as_ref().map_or((a + b) / 2.0, |s| s.shown);
+                self.player.seek(shown, true);
                 self.settings.clip_format = ClipFormat::Gif;
                 self.ui.gif_section_open = Some(true);
                 self.ui.side_tab = SideTab::Inspector;

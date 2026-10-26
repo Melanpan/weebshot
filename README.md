@@ -1,6 +1,6 @@
-# weebshot
+# Weebshot
 
-<img src="assets/mascot.png" alt="weebshot mascot: a girl in a director's chair holding a clapperboard" align="right" width="230">
+<img src="assets/mascot.png" alt="Weebshot mascot: a girl in a director's chair holding a clapperboard" align="right" width="230">
 
 **Frame-accurate anime screenshot & clip maker.**
 Open an episode, find the exact frame or line, and save a full-resolution screenshot or cut a
@@ -14,10 +14,10 @@ WebM, MP4, MKV, GIF or animated WebP — with the subtitles burned in, without t
 > [!WARNING]
 > **This project was vibecoded** — written largely by an AI coding assistant, with a human steering
 > and testing. It works and has a decent test suite, but it hasn't had the scrutiny of a carefully
-> hand-written project. Expect rough edges, and please report what you find. (weebshot only ever
+> hand-written project. Expect rough edges, and please report what you find. (Weebshot only ever
 > *creates* new files; it never modifies your videos.)
 
-![weebshot with an episode open: In/Out set on a subtitle line, thumbnails, waveform and subtitle lane on the timeline](docs/images/hero.jpg)
+![Weebshot with an episode open: In/Out set on a subtitle line, thumbnails, waveform and subtitle lane on the timeline](docs/images/hero.jpg)
 
 ## What it makes
 
@@ -38,7 +38,7 @@ The scene above, marked with one key press on its subtitle line and exported twi
 | **Linux** (x86-64) | [`weebshot-x86_64.AppImage`](https://github.com/Melanpan/weebshot/releases/latest/download/weebshot-x86_64.AppImage) | make executable and run |
 | **macOS** (Apple Silicon) | [`weebshot-macos-arm64.zip`](https://github.com/Melanpan/weebshot/releases/latest/download/weebshot-macos-arm64.zip) | right-click → Open the first time · *experimental* |
 
-Everything is included (player, ffmpeg, gifsicle) — no separate installs. weebshot checks for
+Everything is included (player, ffmpeg, gifsicle) — no separate installs. Weebshot checks for
 updates once a day and can update itself on Windows and Linux.
 More in [Installing & updating](docs/install.md).
 
@@ -66,7 +66,7 @@ More in [Installing & updating](docs/install.md).
 
 ### Clips
 - **WebM** (VP9/Opus), **MP4** (H.264/AAC), **MKV**, **GIF**, **animated WebP**.
-- **Fit into a file size** — pick 4 / 8 / 10 / 25 / 50 MB (imageboards, Discord…) and weebshot
+- **Fit into a file size** — pick 4 / 8 / 10 / 25 / 50 MB (imageboards, Discord…) and Weebshot
   does a 2-pass encode that lands just under it.
 - **GPU encoding** with NVIDIA NVENC, Intel Quick Sync or AMD AMF — detected by actually testing them.
 - 10-bit sources are converted so clips play everywhere; cuts are frame-accurate.
@@ -91,7 +91,7 @@ More in [Installing & updating](docs/install.md).
 
 ![Gruvbox theme](docs/images/theme-gruvbox.jpg)
 
-![weebshot on macOS](docs/images/macos.jpg)
+![Weebshot on macOS](docs/images/macos.jpg)
 
 </details>
 
@@ -112,7 +112,7 @@ The same pages are built into the app (*Help → Documentation*, or F1):
 
 ## Building from source
 
-You need [Rust](https://rustup.rs) (stable). At runtime weebshot looks for `ffmpeg` (and optionally
+You need [Rust](https://rustup.rs) (stable). At runtime Weebshot looks for `ffmpeg` (and optionally
 `gifsicle`) next to itself, then on your `PATH`.
 
 **Windows** — with the Visual Studio Build Tools (C++) installed:
@@ -144,7 +144,7 @@ Pushing a `v*` tag builds all three platforms on GitHub Actions and publishes a 
 
 ## License
 
-weebshot is free software under the [GNU General Public License v3.0 or later](LICENSE).
+Weebshot is free software under the [GNU General Public License v3.0 or later](LICENSE).
 
 It's built on the shoulders of [mpv](https://mpv.io), [FFmpeg](https://ffmpeg.org),
 [gifsicle](https://www.lcdf.org/gifsicle/), [egui](https://github.com/emilk/egui) and

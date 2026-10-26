@@ -23,7 +23,7 @@ Cuts are frame-accurate (the clip is re-encoded, not stream-copied).
 ## Quality or file size
 
 - **Quality** — *Small*, *Balanced*, *High*. Constant quality; the file is as big as it needs to be.
-- **Fit into file size** — pick 4 / 8 / 10 / 25 / 50 MB or type a value. weebshot computes the
+- **Fit into file size** — pick 4 / 8 / 10 / 25 / 50 MB or type a value. Weebshot computes the
   bitrate and encodes in two passes so the result lands just under the limit. If the limit is too
   tight for the clip length it tells you before starting, and hints at a lower resolution when that
   would look better (e.g. *consider 720p*).
@@ -49,7 +49,7 @@ Cuts are frame-accurate (the clip is re-encoded, not stream-copied).
 
 MP4 and MKV can be encoded on the graphics card — NVIDIA NVENC, Intel Quick Sync or AMD AMF —
 which is several times faster than the CPU, at the cost of slightly bigger files for the same
-quality. In *Options → Export → Hardware encoding*, click **Detect GPU encoders**: weebshot encodes
+quality. In *Options → Export → Hardware encoding*, click **Detect GPU encoders**: Weebshot encodes
 a short test clip with each one and lists which actually work with your GPU and drivers. Then pick
 one under *Use for MP4/MKV*.
 

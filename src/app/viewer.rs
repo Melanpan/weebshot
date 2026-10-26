@@ -248,13 +248,6 @@ impl App {
                 ),
             ),
         };
-        let back = self.timeline.restore_time().map(|t| {
-            format!(
-                "Playhead returns to {} when you let go",
-                fmt_timecode(t, fps)
-            )
-        });
-
         let lines = [
             (title, egui::FontId::proportional(18.0), p.marker),
             (detail, egui::FontId::monospace(14.0), egui::Color32::WHITE),
@@ -262,13 +255,6 @@ impl App {
         let galleys: Vec<_> = lines
             .into_iter()
             .map(|(text, font, color)| painter.layout_no_wrap(text, font, color))
-            .chain(back.map(|text| {
-                painter.layout_no_wrap(
-                    text,
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::from_gray(200),
-                )
-            }))
             .collect();
         let pad = vec2(12.0, 8.0);
         let width = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);

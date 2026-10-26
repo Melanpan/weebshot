@@ -146,6 +146,8 @@ pub struct App {
     timeline_rect: egui::Rect,
     ui: UiState,
     sounds: Sounds,
+    /// Title last sent to the window, so it's only updated on change.
+    window_title: String,
     updater: crate::update::Updater,
     view: viewer::ViewState,
     /// Actions requested by menus/buttons this frame, run after drawing.
@@ -261,6 +263,7 @@ impl App {
                 timecode_edit: None,
             },
             sounds: Sounds::new(),
+            window_title: String::new(),
             updater: crate::update::Updater::new(),
             view: Default::default(),
             pending: Vec::new(),
@@ -1106,6 +1109,18 @@ impl App {
         });
     }
 
+    /// "episode.mkv — Weebshot" while a file is open.
+    fn update_window_title(&mut self, ctx: &egui::Context) {
+        let title = match self.player.file.as_ref().and_then(|f| f.file_name()) {
+            Some(name) => format!("{} — Weebshot", name.to_string_lossy()),
+            None => "Weebshot".to_string(),
+        };
+        if title != self.window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
+    }
+
     /// Background work for the open file: (label, progress if measurable).
     fn background_tasks(&self) -> Vec<(&'static str, Option<f32>)> {
         let mut tasks = Vec::new();
@@ -1191,6 +1206,7 @@ impl eframe::App for App {
         self.update_thumbs(&ctx);
         self.update_waveform(&ctx);
         self.poll_updater(&ctx);
+        self.update_window_title(&ctx);
         if self.script.is_none() {
             self.handle_input(&ctx);
         }

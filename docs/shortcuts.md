@@ -1,6 +1,6 @@
 # Keyboard shortcuts
 
-Default bindings. Every one can be changed in *Options → Shortcuts*; the help inside weebshot always shows your current ones.
+Default bindings. Every one can be changed in *Options → Shortcuts*; the help inside Weebshot always shows your current ones.
 
 ### General
 
