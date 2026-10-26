@@ -1,0 +1,14 @@
+/target
+/dist
+# fetched by scripts/fetch-libmpv.ps1
+/vendor/mpv/libmpv-2.dll
+/vendor/mpv/mpv.lib
+/vendor/mpv/mpv.exp
+# test media dropped into the repo root
+/*.mkv
+/*.mp4
+/*.webm
+/*.gif
+/*.webp
+/*.png
+/*.jpg

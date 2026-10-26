@@ -1,0 +1,31 @@
+[package]
+name = "weebshot"
+version = "0.1.0"
+edition = "2024"
+description = "Frame-accurate anime screenshot & clip maker: WebM/MP4/MKV/GIF with burned-in subs, file-size targets and a subtitle-aware timeline."
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Melanpan/weebshot"
+homepage = "https://github.com/Melanpan/weebshot"
+readme = "README.md"
+keywords = ["anime", "screenshot", "gif", "ffmpeg", "mpv"]
+categories = ["multimedia::video"]
+
+[dependencies]
+anyhow = "1.0.104"
+crossbeam-channel = "0.5.17"
+eframe = { version = "0.37", default-features = false, features = ["glow", "persistence", "default_fonts", "wayland", "x11"] }
+egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"] }
+egui_commonmark = "0.26"
+egui_extras = { version = "0.37", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+libmpv2 = "6"
+libmpv2-sys = "4.0.1"
+rfd = "0.17"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+ron = "0.12.2"
+
+[build-dependencies]
+embed-resource = "3.0.12"
