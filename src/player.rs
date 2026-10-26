@@ -220,7 +220,7 @@ impl Player {
         self.chapters.clear();
         self.seek_in_flight = None;
         self.pending_seek = None;
-        self.set_pause(false);
+        self.set_pause(true);
         Ok(())
     }
 
