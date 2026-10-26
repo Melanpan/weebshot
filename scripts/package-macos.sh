@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Builds dist/weebshot-macos-arm64.zip containing weebshot.app (Apple Silicon).
 #
-# Needs: brew install mpv ffmpeg gifsicle dylibbundler, and Rust.
+# Needs: brew install mpv gifsicle dylibbundler, and Rust.
+# ffmpeg is a pinned static build (Homebrew's lacks libass, so it can't burn in subtitles),
+# downloaded unless FFMPEG points at a local executable.
 # The app is not signed or notarized: on first launch, right-click → Open.
 set -euo pipefail
+
+ffmpeg_url="https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip"
+ffmpeg_sha256="c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
@@ -18,7 +23,17 @@ app="$dist/weebshot.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp target/release/weebshot "$app/Contents/MacOS/"
-cp "$brew_prefix/bin/ffmpeg" "$brew_prefix/bin/gifsicle" "$app/Contents/MacOS/"
+cp "$brew_prefix/bin/gifsicle" "$app/Contents/MacOS/"
+if [[ -n "${FFMPEG:-}" ]]; then
+    cp "$FFMPEG" "$app/Contents/MacOS/ffmpeg"
+else
+    cache="$dist/cache"
+    mkdir -p "$cache"
+    zip="$cache/ffmpeg-macos-arm64-9.0.2.zip"
+    [[ -f "$zip" ]] || curl -fsSL -o "$zip" "$ffmpeg_url"
+    echo "$ffmpeg_sha256  $zip" | shasum -a 256 -c - >/dev/null
+    unzip -o -q "$zip" ffmpeg -d "$app/Contents/MacOS/"
+fi
 cp LICENSE THIRD-PARTY.md "$app/Contents/Resources/"
 
 # Icon: build an .icns from the PNG.
@@ -49,8 +64,9 @@ cat >"$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Copy every Homebrew library the three binaries need into Frameworks and rewrite their paths.
-for bin in weebshot ffmpeg gifsicle; do
+# Copy every Homebrew library weebshot and gifsicle need into Frameworks and rewrite their paths
+# (ffmpeg is static).
+for bin in weebshot gifsicle; do
     dylibbundler -of -b -cd \
         -x "$app/Contents/MacOS/$bin" \
         -d "$app/Contents/Frameworks/" \

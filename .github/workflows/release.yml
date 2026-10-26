@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install libraries and tools
-        run: brew install mpv ffmpeg gifsicle dylibbundler
+        run: brew install mpv gifsicle dylibbundler
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build app

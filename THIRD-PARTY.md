@@ -8,7 +8,7 @@ Release packages also contain or use the following.
 | Component | License | Source |
 | --- | --- | --- |
 | **libmpv** (mpv) | GPL-2.0-or-later (these builds include GPL parts) | <https://mpv.io> · Windows builds: <https://github.com/shinchiro/mpv-winbuild-cmake> |
-| **FFmpeg** | GPL-3.0 (Windows: gyan.dev essentials build) | <https://ffmpeg.org> · <https://www.gyan.dev/ffmpeg/builds/> |
+| **FFmpeg** | GPL-3.0 (Windows: gyan.dev essentials build; macOS: static build by Martin Riedl) | <https://ffmpeg.org> · <https://www.gyan.dev/ffmpeg/builds/> · <https://ffmpeg.martin-riedl.de> |
 | **gifsicle** | GPL-2.0 | <https://www.lcdf.org/gifsicle/> · Windows builds: <https://eternallybored.org/misc/gifsicle/> |
 
 The Linux AppImage and macOS app also contain the shared libraries these depend on, as shipped by
