@@ -31,6 +31,7 @@ enum Scene {
     Main,
     Timeline,
     TimelineFrames,
+    MarkerDrag,
     Gif,
     Queue,
     Logs,
@@ -47,7 +48,8 @@ impl Scene {
             Load => Main,
             Main => Timeline,
             Timeline => TimelineFrames,
-            TimelineFrames => Gif,
+            TimelineFrames => MarkerDrag,
+            MarkerDrag => Gif,
             Gif => Queue,
             Queue => Logs,
             Logs => Options,
@@ -63,6 +65,7 @@ impl Scene {
             Main => ("main.jpg", Crop::Window),
             Timeline => ("timeline.jpg", Crop::Timeline),
             TimelineFrames => ("timeline-frames.jpg", Crop::Timeline),
+            MarkerDrag => ("marker-drag.jpg", Crop::Window),
             Gif => ("gif-options.jpg", Crop::Side),
             Queue => ("queue.jpg", Crop::SideTop(240.0)),
             Logs => ("logs.jpg", Crop::SideTop(420.0)),
@@ -229,7 +232,20 @@ impl App {
                 self.timeline
                     .zoom_to(ctx_time - 0.25, ctx_time + 0.25, self.player.duration);
             }
+            Scene::MarkerDrag => {
+                // As if the In flag were being dragged: the viewer shows the In frame.
+                let mid = (a + b) / 2.0;
+                self.timeline
+                    .zoom_to(mid - 30.0, mid + 30.0, self.player.duration);
+                self.player.seek(a, true);
+                self.timeline.fake_marker_drag(
+                    Some(super::timeline::MarkerPreview::In(a)),
+                    Some((a + b) / 2.0),
+                );
+            }
             Scene::Gif => {
+                self.timeline.fake_marker_drag(None, None);
+                self.player.seek((a + b) / 2.0, true);
                 self.settings.clip_format = ClipFormat::Gif;
                 self.ui.gif_section_open = Some(true);
                 self.ui.side_tab = SideTab::Inspector;

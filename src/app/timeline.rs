@@ -45,6 +45,8 @@ pub struct TimelineState {
     pub scrub: Option<f64>,
     /// Playhead position when a drag started (marker drags return to it).
     restore_time: Option<f64>,
+    /// What the viewer is previewing while a marker (or the range) is dragged.
+    pub marker_preview: Option<MarkerPreview>,
     /// Range and thumbnail spacing the filmstrip wants decoded: (start, end, spacing).
     pub thumb_request: Option<(f64, f64, f64)>,
     last_time: f64,
@@ -58,6 +60,7 @@ impl Default for TimelineState {
             drag: None,
             scrub: None,
             restore_time: None,
+            marker_preview: None,
             thumb_request: None,
             last_time: 0.0,
         }
@@ -122,6 +125,32 @@ impl TimelineState {
         if self.view_len.is_none() {
             self.view_start = 0.0;
         }
+    }
+}
+
+/// A marker being dragged: the viewer shows its frame and labels it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MarkerPreview {
+    In(f64),
+    Out(f64),
+    /// The whole range is moving: (in, out).
+    Range(f64, f64),
+}
+
+impl TimelineState {
+    /// Where the playhead goes back to when the marker drag ends.
+    pub fn restore_time(&self) -> Option<f64> {
+        self.restore_time
+    }
+
+    /// Show a marker preview without an actual drag (docs screenshots).
+    pub(super) fn fake_marker_drag(
+        &mut self,
+        preview: Option<MarkerPreview>,
+        restore: Option<f64>,
+    ) {
+        self.marker_preview = preview;
+        self.restore_time = restore;
     }
 }
 
@@ -749,12 +778,14 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
             Drag::In => {
                 let limit = d.out_point.map_or(duration, |o| o - frame);
                 let t = snap_edge(t).min(limit);
+                st.marker_preview = Some(MarkerPreview::In(t));
                 events.push(Event::SetIn(t));
                 events.push(Event::Seek { t, exact: precise });
             }
             Drag::Out => {
                 let limit = d.in_point.map_or(0.0, |i| i + frame);
                 let t = snap_edge(t).max(limit);
+                st.marker_preview = Some(MarkerPreview::Out(t));
                 events.push(Event::SetOut(t));
                 events.push(Event::Seek { t, exact: precise });
             }
@@ -771,6 +802,7 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
                 } else if (snapped_end - start).abs() > 1e-9 {
                     start = snapped_end;
                 }
+                st.marker_preview = Some(MarkerPreview::Range(start, start + len));
                 events.push(Event::SetRange(start, start + len));
                 events.push(Event::Seek {
                     t: start,
@@ -802,6 +834,7 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
         st.drag = None;
         st.scrub = None;
         st.restore_time = None;
+        st.marker_preview = None;
     }
 
     let ctrl = ui.input(|i| i.modifiers.command);

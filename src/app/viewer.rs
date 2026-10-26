@@ -1,5 +1,6 @@
 use eframe::egui::{self, Align2, FontId, RichText, Sense, vec2};
 
+use super::timeline::MarkerPreview;
 use super::{App, widgets};
 use crate::fonts::{filled, icon};
 use crate::keymap::Action;
@@ -163,6 +164,9 @@ impl App {
             let rect_px = video_rect.size() * ppp;
             self.apply_view(rect_px);
             self.player.paint(ui, video_rect);
+            if let Some(preview) = self.timeline.marker_preview {
+                self.marker_overlay(ui, video_rect, preview);
+            }
             if response.clicked() {
                 self.pending.push(Action::PlayPause);
             }
@@ -215,6 +219,77 @@ impl App {
         ui.painter()
             .rect_filled(transport_rect, 0.0, self.palette.bg1);
         self.transport(&mut transport);
+    }
+
+    /// While an In/Out marker (or the range) is dragged on the timeline the viewer shows the
+    /// marker's frame — make that unmistakable: a marker-colored frame and a label.
+    fn marker_overlay(&self, ui: &egui::Ui, rect: egui::Rect, preview: MarkerPreview) {
+        let p = self.palette;
+        let fps = self.player.fps;
+        let painter = ui.painter_at(rect);
+        painter.rect_stroke(
+            rect.shrink(2.0),
+            0.0,
+            egui::Stroke::new(4.0, p.marker),
+            egui::StrokeKind::Inside,
+        );
+
+        let tc = |t: f64| format!("{}  ·  frame {}", fmt_timecode(t, fps), frame_at(t, fps));
+        let (title, detail) = match preview {
+            MarkerPreview::In(t) => (format!("{}  IN POINT", icon::MARK_IN), tc(t)),
+            MarkerPreview::Out(t) => (format!("OUT POINT  {}", icon::MARK_OUT), tc(t)),
+            MarkerPreview::Range(a, b) => (
+                "MOVING IN → OUT  (showing In)".to_string(),
+                format!(
+                    "{} → {}  ·  {:.2}s",
+                    fmt_timecode(a, fps),
+                    fmt_timecode(b, fps),
+                    b - a
+                ),
+            ),
+        };
+        let back = self.timeline.restore_time().map(|t| {
+            format!(
+                "Playhead returns to {} when you let go",
+                fmt_timecode(t, fps)
+            )
+        });
+
+        let lines = [
+            (title, egui::FontId::proportional(18.0), p.marker),
+            (detail, egui::FontId::monospace(14.0), egui::Color32::WHITE),
+        ];
+        let galleys: Vec<_> = lines
+            .into_iter()
+            .map(|(text, font, color)| painter.layout_no_wrap(text, font, color))
+            .chain(back.map(|text| {
+                painter.layout_no_wrap(
+                    text,
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::from_gray(200),
+                )
+            }))
+            .collect();
+        let pad = vec2(12.0, 8.0);
+        let width = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);
+        let height: f32 = galleys.iter().map(|g| g.size().y + 2.0).sum();
+        let badge = egui::Rect::from_min_size(
+            rect.left_top() + vec2(14.0, 14.0),
+            vec2(width, height) + pad * 2.0,
+        );
+        painter.rect_filled(badge, 6.0, egui::Color32::from_black_alpha(190));
+        painter.rect_stroke(
+            badge,
+            6.0,
+            egui::Stroke::new(1.5, p.marker),
+            egui::StrokeKind::Inside,
+        );
+        let mut y = badge.top() + pad.y;
+        for g in galleys {
+            let h = g.size().y;
+            painter.galley(egui::pos2(badge.left() + pad.x, y), g, egui::Color32::WHITE);
+            y += h + 2.0;
+        }
     }
 
     /// Right-click menu on the preview.

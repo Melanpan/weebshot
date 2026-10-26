@@ -45,6 +45,12 @@ so you'll often see the same picture several times in a row:
 | Mouse wheel, Alt + drag, or middle-drag | Scroll left/right |
 | Right-click | Set In/Out here, mark a line, zoom to In/Out, fit |
 
+While you drag a marker, the viewer shows the frame under it — framed in yellow, with a label
+saying which marker it is (**IN POINT**, **OUT POINT** or **MOVING IN → OUT**), its timecode and
+frame number, and where the playhead will return to:
+
+![Dragging the In point](images/marker-drag.jpg)
+
 While dragging In, Out or the range, edges **snap** to subtitle line starts/ends and chapter
 marks when they get close — hold **Shift** to place them freely. Hovering anywhere shows the time and
 frame number; over a subtitle block it also shows the full line.
