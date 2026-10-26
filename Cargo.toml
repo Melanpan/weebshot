@@ -13,7 +13,7 @@ categories = ["multimedia::video"]
 [dependencies]
 anyhow = "1.0.104"
 crossbeam-channel = "0.5.17"
-eframe = { version = "0.37", default-features = false, features = ["glow", "persistence", "default_fonts", "wayland", "x11"] }
+eframe = { version = "0.37", default-features = false, features = ["clipboard", "glow", "persistence", "default_fonts", "wayland", "x11"] }
 egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"] }
 egui_commonmark = "0.26"
 egui_extras = { version = "0.37", default-features = false, features = ["image"] }

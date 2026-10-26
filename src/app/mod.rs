@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Color32, RichText};
 
 use crate::export::ffmpeg::StillJob;
-use crate::export::{self, ClipJob, Crop, JobEvent, Runner, SubMode, SubSource, Tools};
+use crate::export::{self, ClipFormat, ClipJob, Crop, JobEvent, Runner, SubMode, SubSource, Tools};
 use crate::fonts::icon;
 use crate::keymap::{Action, Binding};
 use crate::log;
@@ -622,12 +622,14 @@ impl App {
             audio_ff_index,
             subs: None,
             crop: if s.clip_crop { self.view_crop() } else { None },
-            max_height: if format.is_animation() {
-                s.anim_height
-            } else {
-                s.max_height
+            max_height: match format {
+                ClipFormat::Gif => s.anim_height,
+                ClipFormat::Webp => s.webp_height,
+                _ => s.max_height,
             },
             src_height: self.player.video_height,
+            max_fps: s.max_fps,
+            src_fps: Some(self.player.fps),
             fps: s.anim_fps,
             anim: s.anim,
             encoder: s.encoder.clone(),

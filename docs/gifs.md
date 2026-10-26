@@ -42,4 +42,4 @@ set it in *Options → Export*).
 ## Animated WebP
 
 Uses *Size*, *FPS*, *Quality* and *Drop duplicate frames*. Usually far smaller than a GIF and supports
-full color, but not every site accepts it.
+full color, but not every site accepts it. *Size* is separate from the GIF one and defaults to 720p.

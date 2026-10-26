@@ -181,7 +181,17 @@ impl ClipJob {
                 // conversion is unaffected (verified byte-identical), so just tag it.
                 filters.push("setparams=color_trc=iec61966-2-1".into());
             }
+            if self.format == ClipFormat::Webp {
+                // Hand libwebp RGB: it converts with the matrix WebP decoders assume, and
+                // scores better at the same size than ffmpeg's yuv420p.
+                filters.push("format=bgra".into());
+            }
         } else {
+            if let Some(fps) = self.max_fps
+                && self.src_fps.is_none_or(|src| f64::from(fps) < src - 0.01)
+            {
+                filters.push(format!("fps={fps}"));
+            }
             // Anime releases are often 10-bit; force 8-bit 4:2:0 for playback compatibility.
             // (Quick Sync wants the same thing in its native NV12 layout.)
             filters.push(if self.hw() == Some(HwEncoder::Qsv) {
@@ -295,7 +305,7 @@ impl ClipJob {
                 "-loop",
                 "0",
                 "-compression_level",
-                "5",
+                "6",
             ])
             .collect(),
         };
@@ -318,9 +328,9 @@ impl ClipJob {
             }
             if self.format == ClipFormat::Webp {
                 let qv = match q {
-                    Quality::Small => 60,
-                    Quality::Balanced => 75,
-                    Quality::High => 90,
+                    Quality::Small => 70,
+                    Quality::Balanced => 85,
+                    Quality::High => 92,
                 };
                 args.extend(["-q:v".into(), qv.to_string()]);
             }
@@ -569,6 +579,8 @@ mod tests {
             crop: None,
             max_height: None,
             src_height: Some(1080),
+            max_fps: None,
+            src_fps: Some(23.976),
             fps: 15,
             anim: AnimOptions::default(),
             encoder: EncoderOptions::default(),
@@ -677,6 +689,22 @@ mod tests {
         j.max_height = Some(1080);
         j.src_height = Some(720);
         assert!(!j.video_chain().1.iter().any(|f| f.starts_with("scale=")));
+    }
+
+    #[test]
+    fn webp_gets_rgb_input() {
+        let j = job(ClipFormat::Webp);
+        assert_eq!(j.video_chain().1.last().unwrap(), "format=bgra");
+        assert!(joined(&j.build_steps(&tmp()).unwrap()[0]).contains("-q:v 85"));
+    }
+
+    #[test]
+    fn fps_cap_never_raises_rate() {
+        let mut j = job(ClipFormat::Webm);
+        j.max_fps = Some(12);
+        assert!(j.video_chain().1.contains(&"fps=12".to_string()));
+        j.max_fps = Some(24);
+        assert!(!j.video_chain().1.iter().any(|f| f.starts_with("fps=")));
     }
 
     #[test]

@@ -20,6 +20,20 @@ const HEIGHT_PRESETS: &[Option<u32>] = &[
     Some(240),
 ];
 
+const FPS_PRESETS: &[Option<u32>] = &[
+    None,
+    Some(60),
+    Some(30),
+    Some(25),
+    Some(24),
+    Some(15),
+    Some(12),
+];
+
+fn fps_label(f: Option<u32>) -> String {
+    f.map_or("Original".into(), |f| format!("{f} fps"))
+}
+
 fn height_label(h: Option<u32>) -> String {
     h.map_or("Original".into(), |h| format!("{h}p"))
 }
@@ -267,6 +281,14 @@ impl App {
                         ui.selectable_value(&mut s.max_height, h, height_label(h));
                     }
                 });
+            ui.weak("Frame rate");
+            egui::ComboBox::from_id_salt("max_fps")
+                .selected_text(fps_label(s.max_fps))
+                .show_ui(ui, |ui| {
+                    for &f in FPS_PRESETS {
+                        ui.selectable_value(&mut s.max_fps, f, fps_label(f));
+                    }
+                });
         });
         ui.checkbox(&mut s.include_audio, "Include audio");
     }
@@ -280,11 +302,16 @@ impl App {
 
         ui.horizontal(|ui| {
             ui.weak("Size");
+            let height = if is_gif {
+                &mut s.anim_height
+            } else {
+                &mut s.webp_height
+            };
             egui::ComboBox::from_id_salt("anim_height")
-                .selected_text(height_label(s.anim_height))
+                .selected_text(height_label(*height))
                 .show_ui(ui, |ui| {
                     for &h in HEIGHT_PRESETS {
-                        ui.selectable_value(&mut s.anim_height, h, height_label(h));
+                        ui.selectable_value(height, h, height_label(h));
                     }
                 });
             ui.weak("FPS");
@@ -346,6 +373,9 @@ impl App {
             ui.checkbox(&mut s.anim.dedupe, "Drop duplicate frames");
         }
 
+        if !is_gif {
+            return;
+        }
         if duration > 15.0 {
             ui.colored_label(
                 p.warn,
