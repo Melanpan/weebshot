@@ -89,6 +89,8 @@ pub struct Settings {
     pub max_fps: Option<u32>,
     /// Height for GIF/WebP; these get huge at full resolution.
     pub anim_height: Option<u32>,
+    /// Animated WebP compresses far better than GIF, so it gets its own, larger size.
+    pub webp_height: Option<u32>,
     pub anim_fps: u32,
     pub anim: AnimOptions,
     pub include_audio: bool,
@@ -148,6 +150,7 @@ impl Default for Settings {
             max_height: None,
             max_fps: None,
             anim_height: Some(360),
+            webp_height: Some(720),
             anim_fps: 15,
             anim: AnimOptions::default(),
             include_audio: true,

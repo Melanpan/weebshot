@@ -273,11 +273,16 @@ impl App {
 
         ui.horizontal(|ui| {
             ui.weak("Size");
+            let height = if is_gif {
+                &mut s.anim_height
+            } else {
+                &mut s.webp_height
+            };
             egui::ComboBox::from_id_salt("anim_height")
-                .selected_text(height_label(s.anim_height))
+                .selected_text(height_label(*height))
                 .show_ui(ui, |ui| {
                     for &h in HEIGHT_PRESETS {
-                        ui.selectable_value(&mut s.anim_height, h, height_label(h));
+                        ui.selectable_value(height, h, height_label(h));
                     }
                 });
             ui.weak("FPS");
@@ -339,6 +344,9 @@ impl App {
             ui.checkbox(&mut s.anim.dedupe, "Drop duplicate frames");
         }
 
+        if !is_gif {
+            return;
+        }
         if duration > 15.0 {
             ui.colored_label(
                 p.warn,

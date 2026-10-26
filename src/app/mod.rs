@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText};
 
-use crate::export::{self, ClipJob, JobEvent, Runner, SubMode, SubSource, Tools};
+use crate::export::{self, ClipFormat, ClipJob, JobEvent, Runner, SubMode, SubSource, Tools};
 use crate::fonts::icon;
 use crate::keymap::{Action, Binding};
 use crate::log;
@@ -540,10 +540,10 @@ impl App {
             target_mb: (s.use_target_size && format.supports_target_size()).then_some(s.target_mb),
             audio_ff_index,
             subs: None,
-            max_height: if format.is_animation() {
-                s.anim_height
-            } else {
-                s.max_height
+            max_height: match format {
+                ClipFormat::Gif => s.anim_height,
+                ClipFormat::Webp => s.webp_height,
+                _ => s.max_height,
             },
             src_height: self.player.video_height,
             max_fps: s.max_fps,
