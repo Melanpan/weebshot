@@ -437,6 +437,12 @@ impl App {
         }
     }
 
+    /// Subtitle cues are read first so the subtitle lane shows up quickly; thumbnails and the
+    /// waveform wait for them instead of competing for the disk.
+    fn cues_loading(&self) -> bool {
+        self.cues.as_ref().is_some_and(|c| c.loading())
+    }
+
     // ---- export ---------------------------------------------------------
 
     fn template_vars(&self, extra: &[(&str, String)]) -> Vec<(&'static str, String)> {
@@ -870,7 +876,8 @@ impl App {
         if let Some(w) = &mut self.waveform {
             w.poll();
         }
-        if !self.settings.show_audio_lane || self.tool_status.ffmpeg.is_err() {
+        if !self.settings.show_audio_lane || self.tool_status.ffmpeg.is_err() || self.cues_loading()
+        {
             return;
         }
         let wanted = self.player.file.clone().zip(
@@ -904,7 +911,9 @@ impl App {
         ) else {
             return;
         };
-        if self.tool_status.ffmpeg.is_err() || self.thumbs.as_ref().is_some_and(|t| t.matches(file))
+        if self.tool_status.ffmpeg.is_err()
+            || self.cues_loading()
+            || self.thumbs.as_ref().is_some_and(|t| t.matches(file))
         {
             return;
         }

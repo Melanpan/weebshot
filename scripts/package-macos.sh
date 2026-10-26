@@ -56,6 +56,15 @@ for bin in weebshot ffmpeg gifsicle; do
         -d "$app/Contents/Frameworks/" \
         -p @executable_path/../Frameworks/
 done
+# dylibbundler can add the same LC_RPATH more than once, which dyld (macOS 15.4+) refuses to load.
+for file in "$app/Contents/MacOS/"* "$app/Contents/Frameworks/"*; do
+    for rpath in $(otool -l "$file" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' | sort | uniq -d); do
+        while otool -l "$file" | grep -q "path $rpath "; do
+            install_name_tool -delete_rpath "$rpath" "$file"
+        done
+        install_name_tool -add_rpath "$rpath" "$file"
+    done
+done
 # Rewriting load commands invalidates signatures; ad-hoc sign so Apple Silicon will run it.
 codesign --force --deep --sign - "$app"
 
