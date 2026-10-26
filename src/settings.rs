@@ -77,6 +77,8 @@ pub struct Settings {
     // Screenshot
     pub shot_format: ShotFormat,
     pub shot_subs: SubMode,
+    /// When the preview is zoomed in, save only the visible part.
+    pub shot_crop: bool,
 
     // Clip
     pub clip_format: ClipFormat,
@@ -91,6 +93,8 @@ pub struct Settings {
     pub anim: AnimOptions,
     pub include_audio: bool,
     pub clip_subs: SubMode,
+    /// When the preview is zoomed in, export only the visible part.
+    pub clip_crop: bool,
     pub encoder: EncoderOptions,
 
     // Playback
@@ -139,6 +143,7 @@ impl Default for Settings {
             clip_template: "{name}_{start}-{end}".into(),
             shot_format: ShotFormat::Png,
             shot_subs: SubMode::Burned,
+            shot_crop: true,
             clip_format: ClipFormat::Webm,
             quality: Quality::Balanced,
             use_target_size: false,
@@ -149,6 +154,7 @@ impl Default for Settings {
             anim: AnimOptions::default(),
             include_audio: true,
             clip_subs: SubMode::Burned,
+            clip_crop: true,
             encoder: EncoderOptions::default(),
             volume: 70.0,
             audio_langs: "jpn,ja,jp".into(),

@@ -1,7 +1,7 @@
 use eframe::egui::{self, RichText, vec2};
 
 use super::App;
-use crate::export::{AnimOptions, ClipFormat, Dither, Quality, SubMode, size};
+use crate::export::{AnimOptions, ClipFormat, Crop, Dither, Quality, SubMode, size};
 use crate::fonts::icon;
 use crate::keymap::Action;
 use crate::settings::ShotFormat;
@@ -106,6 +106,21 @@ impl App {
         .on_disabled_hover_text("Select a subtitle track first");
     }
 
+    /// "Only the zoomed-in part" checkbox; only meaningful while the preview is zoomed in.
+    fn crop_ui(ui: &mut egui::Ui, on: &mut bool, crop: Option<Crop>, label: &str) {
+        ui.add_enabled_ui(crop.is_some(), |ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(on, label);
+                if let Some(c) = crop {
+                    ui.weak(format!("{}×{}", c.width, c.height));
+                }
+            });
+        })
+        .response
+        .on_disabled_hover_text("Zoom into the preview (Ctrl+wheel or the zoom buttons) to crop")
+        .on_hover_text("Export what you see in the zoomed preview instead of the whole frame");
+    }
+
     fn big_button(&mut self, ui: &mut egui::Ui, action: Action, label: &str, enabled: bool) {
         let shortcut = self.settings.keymap.text(action);
         let text = if shortcut.is_empty() {
@@ -129,6 +144,13 @@ impl App {
             }
         });
         Self::sub_mode_ui(ui, &mut self.settings.shot_subs, has_subs);
+        let crop = self.view_crop();
+        Self::crop_ui(
+            ui,
+            &mut self.settings.shot_crop,
+            crop,
+            "Only the zoomed-in part",
+        );
         let ready = self.player.file.is_some();
         self.big_button(
             ui,
@@ -176,6 +198,13 @@ impl App {
         let has_subs = self.player.sid.is_some();
         ui.weak("Subtitles");
         Self::sub_mode_ui(ui, &mut self.settings.clip_subs, has_subs);
+        let crop = self.view_crop();
+        Self::crop_ui(
+            ui,
+            &mut self.settings.clip_crop,
+            crop,
+            "Only the zoomed-in part",
+        );
 
         let ready = self.player.file.is_some() && self.tool_status.ffmpeg.is_ok();
         self.big_button(

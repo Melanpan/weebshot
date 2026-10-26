@@ -38,13 +38,16 @@ pub enum Action {
     ExportClip,
     ToggleDock,
     Fullscreen,
+    ViewZoomIn,
+    ViewZoomOut,
+    ViewZoomFit,
     ZoomIn,
     ZoomOut,
     ZoomFit,
 }
 
 impl Action {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 36] = [
         Self::Open,
         Self::Close,
         Self::Quit,
@@ -75,6 +78,9 @@ impl Action {
         Self::ExportClip,
         Self::ToggleDock,
         Self::Fullscreen,
+        Self::ViewZoomIn,
+        Self::ViewZoomOut,
+        Self::ViewZoomFit,
         Self::ZoomIn,
         Self::ZoomOut,
         Self::ZoomFit,
@@ -112,6 +118,9 @@ impl Action {
             Self::ExportClip => "Export clip",
             Self::ToggleDock => "Switch Inspector / Queue",
             Self::Fullscreen => "Fullscreen",
+            Self::ViewZoomIn => "Zoom preview in",
+            Self::ViewZoomOut => "Zoom preview out",
+            Self::ViewZoomFit => "Fit preview to window",
             Self::ZoomIn => "Timeline zoom in",
             Self::ZoomOut => "Timeline zoom out",
             Self::ZoomFit => "Timeline zoom to fit",
@@ -122,6 +131,7 @@ impl Action {
         use Action::*;
         match self {
             Open | Close | Quit | Options | Docs | ToggleDock | Fullscreen => "General",
+            ViewZoomIn | ViewZoomOut | ViewZoomFit => "Preview",
             PlayPause | FrameBack | FrameForward | SeekBackSmall | SeekForwardSmall
             | SeekBackBig | SeekForwardBig | PrevSubtitle | NextSubtitle | ShuttleBack
             | ShuttleStop | ShuttleForward | ToggleSubtitles => "Playback",
@@ -263,6 +273,9 @@ pub fn default_binding(action: Action) -> Option<Binding> {
         ExportClip => Binding::key(Key::E),
         ToggleDock => Binding::ctrl(Key::J),
         Fullscreen => Binding::key(Key::F11),
+        ViewZoomIn => Binding::ctrl(Key::Equals),
+        ViewZoomOut => Binding::ctrl(Key::Minus),
+        ViewZoomFit => Binding::ctrl(Key::Num0),
         ZoomIn => Binding::key(Key::Equals),
         ZoomOut => Binding::key(Key::Minus),
         ZoomFit => Binding::shift(Key::Z),

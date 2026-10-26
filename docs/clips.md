@@ -28,6 +28,13 @@ Cuts are frame-accurate (the clip is re-encoded, not stream-copied).
   tight for the clip length it tells you before starting, and hints at a lower resolution when that
   would look better (e.g. *consider 720p*).
 
+## Only the zoomed-in part
+
+Zoom into the preview (the zoom buttons under it, or Ctrl+wheel over the picture) and tick
+**Only the zoomed-in part** to export just the area you see. The crop is taken when you press
+Export; its size is shown next to the checkbox. Burned-in text subtitles are drawn at their normal
+size at the bottom of the cropped picture (image subtitles are cropped along with the frame).
+
 ## Resolution and audio
 
 - **Resolution** — *Original* or a maximum height (1080p … 240p). Never upscales.

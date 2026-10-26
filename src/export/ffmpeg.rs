@@ -4,7 +4,9 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::{ClipFormat, ClipJob, HwEncoder, Quality, Step, SubSource, TempFiles, Tool, size};
+use super::{
+    ClipFormat, ClipJob, Crop, HwEncoder, Quality, Step, SubSource, TempFiles, Tool, size,
+};
 
 /// Escape a path for use as a filter option value inside a filtergraph.
 ///
@@ -26,6 +28,95 @@ pub fn escape_filter_path(path: &Path) -> String {
     let s = path.to_string_lossy().replace('\\', "/");
     let option_level = escape(&s, &['\'', ':']);
     escape(&option_level, &['\'', '[', ']', ',', ';'])
+}
+
+/// Input pad(s) and filters for cropping and burning in subtitles, starting from the input
+/// stream at `start` seconds into the source.
+///
+/// Text subtitles are burned in *after* cropping so they keep their normal size at the bottom
+/// of the cropped picture, like the zoomed preview shows them. Image subtitles (PGS) are
+/// positioned on the full frame, so those are overlaid first and cropped with it.
+fn subtitle_chain(
+    start: f64,
+    subs: Option<&SubSource>,
+    crop: Option<Crop>,
+) -> (String, Vec<String>) {
+    let mut filters: Vec<String> = Vec::new();
+    let mut input = "[0:v:0]".to_string();
+    match subs {
+        Some(SubSource::Text { path, stream }) => {
+            filters.extend(crop.map(Crop::filter));
+            // Input-side -ss rebases timestamps to 0, but the subtitle file
+            // isn't seeked, so shift into source time and back.
+            filters.push(format!("setpts=PTS+{}/TB", secs(start)));
+            filters.push(format!(
+                "subtitles=filename={}:si={stream}",
+                escape_filter_path(path)
+            ));
+            filters.push("setpts=PTS-STARTPTS".into());
+        }
+        Some(SubSource::Bitmap { ff_index }) => {
+            input = format!("[0:v:0][0:{ff_index}]");
+            filters.push("overlay=format=auto".into());
+            filters.extend(crop.map(Crop::filter));
+        }
+        None => filters.extend(crop.map(Crop::filter)),
+    }
+    (input, filters)
+}
+
+/// A single frame saved by ffmpeg — used for screenshots of a cropped (zoomed) view, which
+/// mpv's own screenshots can't do.
+#[derive(Clone, Debug)]
+pub struct StillJob {
+    pub input: std::path::PathBuf,
+    /// Exact timestamp of the frame on screen.
+    pub time: f64,
+    pub fps: f64,
+    pub crop: Option<Crop>,
+    pub subs: Option<SubSource>,
+    pub output: std::path::PathBuf,
+}
+
+impl StillJob {
+    pub fn args(&self) -> Vec<String> {
+        // Seek a quarter frame early: ffmpeg keeps the first frame at or after the seek
+        // point, which is then exactly the frame that was on screen.
+        let start = (self.time - 0.25 / self.fps.max(1.0)).max(0.0);
+        let (input, chain) = subtitle_chain(start, self.subs.as_ref(), self.crop);
+        let graph = if chain.is_empty() {
+            format!("{input}null[v]")
+        } else {
+            format!("{input}{}[v]", chain.join(","))
+        };
+        let mut args: Vec<String> = strings([
+            "-hide_banner",
+            "-nostdin",
+            "-y",
+            "-loglevel",
+            "warning",
+            "-ss",
+        ])
+        .collect();
+        args.push(secs(start));
+        args.push("-i".into());
+        args.push(self.input.to_string_lossy().into_owned());
+        args.extend(["-filter_complex".into(), graph, "-map".into(), "[v]".into()]);
+        args.extend(strings(["-frames:v", "1", "-update", "1"]));
+        let ext = self
+            .output
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "jpg" | "jpeg" => args.extend(strings(["-q:v", "2"])),
+            "webp" => args.extend(strings(["-c:v", "libwebp", "-quality", "92"])),
+            _ => {}
+        }
+        args.push(self.output.to_string_lossy().into_owned());
+        args
+    }
 }
 
 fn secs(t: f64) -> String {
@@ -72,26 +163,7 @@ impl ClipJob {
     /// Input pad(s) and the filter chain shared by every output format:
     /// subtitles, scaling, frame rate / pixel format.
     fn video_chain(&self) -> (String, Vec<String>) {
-        let mut filters: Vec<String> = Vec::new();
-        let mut input = "[0:v:0]".to_string();
-
-        match &self.subs {
-            Some(SubSource::Text { path, stream }) => {
-                // Input-side -ss rebases timestamps to 0, but the subtitle file
-                // isn't seeked, so shift into source time and back.
-                filters.push(format!("setpts=PTS+{}/TB", secs(self.start)));
-                filters.push(format!(
-                    "subtitles=filename={}:si={stream}",
-                    escape_filter_path(path)
-                ));
-                filters.push("setpts=PTS-STARTPTS".into());
-            }
-            Some(SubSource::Bitmap { ff_index }) => {
-                input = format!("[0:v:0][0:{ff_index}]");
-                filters.push("overlay=format=auto".into());
-            }
-            None => {}
-        }
+        let (input, mut filters) = subtitle_chain(self.start, self.subs.as_ref(), self.crop);
 
         if let Some(h) = self.max_height
             && self.src_height.is_none_or(|src| h < src)
@@ -494,6 +566,7 @@ mod tests {
             target_mb: None,
             audio_ff_index: Some(1),
             subs: None,
+            crop: None,
             max_height: None,
             src_height: Some(1080),
             fps: 15,
@@ -542,6 +615,52 @@ mod tests {
             format!("{input}{}", chain.join(",")),
             r"[0:v:0]setpts=PTS+83.500/TB,subtitles=filename=C\\:/anime/\[Group\] Show - 01.mkv:si=1,setpts=PTS-STARTPTS,scale=-2:720:flags=lanczos,format=yuv420p"
         );
+    }
+
+    #[test]
+    fn crop_goes_before_text_subs_and_after_bitmap_subs() {
+        let crop = Crop {
+            x: 480,
+            y: 270,
+            width: 960,
+            height: 540,
+        };
+        let mut j = job(ClipFormat::Mp4);
+        j.crop = Some(crop);
+        j.subs = Some(SubSource::Text {
+            path: PathBuf::from("a.mkv"),
+            stream: 0,
+        });
+        let (_, chain) = j.video_chain();
+        assert_eq!(chain[0], "crop=960:540:480:270");
+        assert!(chain[2].starts_with("subtitles="));
+
+        j.subs = Some(SubSource::Bitmap { ff_index: 3 });
+        let (input, chain) = j.video_chain();
+        assert_eq!(input, "[0:v:0][0:3]");
+        assert_eq!(chain[..2], ["overlay=format=auto", "crop=960:540:480:270"]);
+    }
+
+    #[test]
+    fn still_frame_args() {
+        let s = StillJob {
+            input: PathBuf::from("ep.mkv"),
+            time: 10.0,
+            fps: 24.0,
+            crop: Some(Crop {
+                x: 0,
+                y: 0,
+                width: 640,
+                height: 360,
+            }),
+            subs: None,
+            output: PathBuf::from("shot.jpg"),
+        };
+        let a = s.args().join(" ");
+        assert!(a.contains("-ss 9.990 -i ep.mkv"));
+        assert!(a.contains("[0:v:0]crop=640:360:0:0[v]"));
+        assert!(a.contains("-frames:v 1"));
+        assert!(a.ends_with("-q:v 2 shot.jpg"));
     }
 
     #[test]

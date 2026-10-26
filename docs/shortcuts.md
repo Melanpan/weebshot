@@ -57,6 +57,14 @@ Default bindings. Every one can be changed in *Options → Shortcuts*; the help 
 | Switch Inspector / Queue | `Ctrl+J` |
 | Fullscreen | `F11` |
 
+### Preview
+
+| Action | Shortcut |
+| --- | --- |
+| Zoom preview in | `Ctrl+=` |
+| Zoom preview out | `Ctrl+-` |
+| Fit preview to window | `Ctrl+0` |
+
 ### Timeline
 
 | Action | Shortcut |
