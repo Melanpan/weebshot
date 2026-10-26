@@ -17,7 +17,18 @@ WebM, MP4, MKV, GIF or animated WebP — with the subtitles burned in, without t
 > hand-written project. Expect rough edges, and please report what you find. (weebshot only ever
 > *creates* new files; it never modifies your videos.)
 
-![weebshot with an episode open](docs/images/main.jpg)
+![weebshot with an episode open: In/Out set on a subtitle line, thumbnails, waveform and subtitle lane on the timeline](docs/images/hero.jpg)
+
+## What it makes
+
+The scene above, marked with one key press on its subtitle line and exported twice:
+
+<img src="docs/examples/gekota-kick.gif" alt="Example GIF: 'Take this! Heroic Gekota Kick!' with burned-in subtitles" width="480">
+
+| | Settings | Size |
+| --- | --- | --- |
+| [**WebM**](docs/examples/gekota-kick.webm) (click to play) | 1080p, VP9 + Opus, subtitles burned in, *fit into 8 MB* | 3.7 MB · 6.1 s |
+| **GIF** (above) | 360p, 15 fps, Balanced preset, duplicate frames dropped | 2.6 MB · 6.1 s |
 
 ## Download
 

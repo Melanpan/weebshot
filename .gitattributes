@@ -7,3 +7,5 @@
 *.ico binary
 *.ttf binary
 *.wav binary
+*.webm binary
+*.gif binary
