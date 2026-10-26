@@ -1,7 +1,7 @@
 # GIFs
 
 GIF is an old format: 256 colors per frame and no real video compression. A few seconds of
-1080p anime can easily be 100+ MB. weebshot does a lot to keep GIFs small, but the biggest
+1080p anime can easily be 100+ MB. Weebshot does a lot to keep GIFs small, but the biggest
 wins are yours to choose:
 
 1. **Keep it short.** 2–6 seconds is the sweet spot. A warning appears past 15 s.

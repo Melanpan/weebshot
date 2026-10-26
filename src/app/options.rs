@@ -54,7 +54,7 @@ impl App {
         let open = super::native_window(
             ctx,
             "options",
-            "weebshot — Options",
+            "Weebshot — Options",
             [640.0, 500.0],
             [480.0, 320.0],
             |ui| {

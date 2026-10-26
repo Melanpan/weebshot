@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText};
 
-use crate::export::{self, ClipFormat, ClipJob, JobEvent, Runner, SubMode, SubSource, Tools};
+use crate::export::ffmpeg::StillJob;
+use crate::export::{self, ClipFormat, ClipJob, Crop, JobEvent, Runner, SubMode, SubSource, Tools};
 use crate::fonts::icon;
 use crate::keymap::{Action, Binding};
 use crate::log;
@@ -146,6 +147,10 @@ pub struct App {
     timeline_rect: egui::Rect,
     ui: UiState,
     sounds: Sounds,
+    /// A cropped screenshot being rendered by ffmpeg.
+    shot_rx: Option<crossbeam_channel::Receiver<Result<Vec<String>, String>>>,
+    /// Title last sent to the window, so it's only updated on change.
+    window_title: String,
     updater: crate::update::Updater,
     view: viewer::ViewState,
     /// Actions requested by menus/buttons this frame, run after drawing.
@@ -201,6 +206,7 @@ impl App {
         settings.keymap.migrate();
 
         crate::fonts::install(&cc.egui_ctx);
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         // The screenshot run draws Options/Help inside the main window so one capture
         // shows them (separate native windows can't be captured from here).
         if script.is_some() {
@@ -261,6 +267,8 @@ impl App {
                 timecode_edit: None,
             },
             sounds: Sounds::new(),
+            shot_rx: None,
+            window_title: String::new(),
             updater: crate::update::Updater::new(),
             view: Default::default(),
             pending: Vec::new(),
@@ -474,6 +482,11 @@ impl App {
             SubMode::Burned => &[(true, "")],
             SubMode::Both => &[(true, "_subbed"), (false, "_raw")],
         };
+        if self.settings.shot_crop
+            && let Some(crop) = self.view_crop()
+        {
+            return self.cropped_screenshot(crop, variants, &dir, &base);
+        }
         let mut saved = Vec::new();
         for &(subs, suffix) in variants {
             let path = unique_path(&dir, &format!("{base}{suffix}"), format.ext());
@@ -485,6 +498,74 @@ impl App {
         }
         self.play_sound(Sound::Screenshot);
         self.info(format!("Saved {}", saved.join(", ")));
+    }
+
+    /// Screenshot of just the zoomed-in part of the frame, rendered by ffmpeg (mpv's own
+    /// screenshots are always the full frame). Runs in the background; `poll_screenshots`
+    /// reports the result.
+    fn cropped_screenshot(
+        &mut self,
+        crop: Crop,
+        variants: &[(bool, &str)],
+        dir: &Path,
+        base: &str,
+    ) {
+        let (Some(input), Ok(_)) = (self.player.file.clone(), &self.tool_status.ffmpeg) else {
+            return self.error("Cropped screenshots need ffmpeg");
+        };
+        let subs = match self.sub_source() {
+            Ok(s) => s,
+            Err(e) => return self.error(e),
+        };
+        let jobs: Vec<StillJob> = variants
+            .iter()
+            .map(|&(burn, suffix)| StillJob {
+                input: input.clone(),
+                time: self.player.time,
+                fps: self.player.fps,
+                crop: Some(crop),
+                subs: if burn { subs.clone() } else { None },
+                output: unique_path(
+                    dir,
+                    &format!("{base}{suffix}"),
+                    self.settings.shot_format.ext(),
+                ),
+            })
+            .collect();
+        let ffmpeg = self.tools.ffmpeg.clone();
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let mut saved = Vec::new();
+            for job in jobs {
+                if let Err(e) = export::run_still(&ffmpeg, &job) {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+                saved.push(
+                    job.output
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            let _ = tx.send(Ok(saved));
+        });
+        self.shot_rx = Some(rx);
+        self.info(format!("Saving {}×{} crop…", crop.width, crop.height));
+    }
+
+    fn poll_screenshots(&mut self) {
+        let Some(rx) = &self.shot_rx else { return };
+        let Ok(result) = rx.try_recv() else { return };
+        self.shot_rx = None;
+        match result {
+            Ok(saved) => {
+                self.play_sound(Sound::Screenshot);
+                self.info(format!("Saved {}", saved.join(", ")));
+            }
+            Err(e) => self.error(format!("Screenshot failed: {e}")),
+        }
     }
 
     fn sub_source(&self) -> Result<Option<SubSource>, String> {
@@ -540,6 +621,7 @@ impl App {
             target_mb: (s.use_target_size && format.supports_target_size()).then_some(s.target_mb),
             audio_ff_index,
             subs: None,
+            crop: if s.clip_crop { self.view_crop() } else { None },
             max_height: match format {
                 ClipFormat::Gif => s.anim_height,
                 ClipFormat::Webp => s.webp_height,
@@ -855,6 +937,9 @@ impl App {
                     SideTab::Inspector
                 };
             }
+            Action::ViewZoomIn => self.zoom_view_by(1.25),
+            Action::ViewZoomOut => self.zoom_view_by(0.8),
+            Action::ViewZoomFit => self.reset_view_zoom(),
             Action::ZoomIn => self.timeline.zoom(0.5, None, self.player.duration),
             Action::ZoomOut => self.timeline.zoom(2.0, None, self.player.duration),
             Action::ZoomFit => self.timeline.fit(),
@@ -1108,6 +1193,18 @@ impl App {
         });
     }
 
+    /// "episode.mkv — Weebshot" while a file is open.
+    fn update_window_title(&mut self, ctx: &egui::Context) {
+        let title = match self.player.file.as_ref().and_then(|f| f.file_name()) {
+            Some(name) => format!("{} — Weebshot", name.to_string_lossy()),
+            None => "Weebshot".to_string(),
+        };
+        if title != self.window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
+    }
+
     /// Background work for the open file: (label, progress if measurable).
     fn background_tasks(&self) -> Vec<(&'static str, Option<f32>)> {
         let mut tasks = Vec::new();
@@ -1193,6 +1290,8 @@ impl eframe::App for App {
         self.update_thumbs(&ctx);
         self.update_waveform(&ctx);
         self.poll_updater(&ctx);
+        self.poll_screenshots();
+        self.update_window_title(&ctx);
         if self.script.is_none() {
             self.handle_input(&ctx);
         }
@@ -1208,10 +1307,12 @@ impl eframe::App for App {
         egui::Panel::bottom("status")
             .frame(panel_frame)
             .show(ui, |ui| self.status_bar(ui));
+        let fitted =
+            timeline::fitted_height(self.settings.show_audio_lane, self.settings.show_sub_lane);
         egui::Panel::bottom("timeline")
             .resizable(true)
-            .default_size(230.0)
-            .min_size(170.0)
+            .default_size(fitted)
+            .min_size(fitted.min(140.0))
             .frame(
                 egui::Frame::new()
                     .fill(self.palette.bg1)
@@ -1221,7 +1322,7 @@ impl eframe::App for App {
         if self.settings.show_inspector {
             egui::Panel::right("side")
                 .resizable(true)
-                .default_size(360.0)
+                .default_size(440.0)
                 .min_size(280.0)
                 .frame(
                     egui::Frame::new()
@@ -1257,6 +1358,11 @@ impl eframe::App for App {
             return;
         }
         eframe::set_value(storage, eframe::APP_KEY, &self.settings);
+    }
+
+    /// The docs screenshot run must not pick up (or overwrite) the user's panel sizes.
+    fn persist_egui_memory(&self) -> bool {
+        self.script.is_none()
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {

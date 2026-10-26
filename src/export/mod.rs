@@ -273,6 +273,21 @@ pub const X264_PRESETS: &[&str] = &[
     "veryslow",
 ];
 
+/// A rectangle of the source frame, in source pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Crop {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Crop {
+    pub fn filter(self) -> String {
+        format!("crop={}:{}:{}:{}", self.width, self.height, self.x, self.y)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum SubSource {
     /// ASS/SRT rendered with libass. `stream` is the index among subtitle streams of `path`.
@@ -292,6 +307,8 @@ pub struct ClipJob {
     pub target_mb: Option<f64>,
     pub audio_ff_index: Option<i64>,
     pub subs: Option<SubSource>,
+    /// Only export this part of the frame: (x, y, width, height) in source pixels.
+    pub crop: Option<Crop>,
     pub max_height: Option<u32>,
     pub src_height: Option<u32>,
     /// Frame rate cap for video formats; never raises the source rate.
@@ -545,6 +562,36 @@ fn run_steps(
     Ok(())
 }
 
+/// Render one still frame (a cropped screenshot) with ffmpeg.
+pub fn run_still(ffmpeg: &Path, job: &ffmpeg::StillJob) -> Result<(), String> {
+    let args = job.args();
+    log::info(
+        "export",
+        format!("$ {}", log::format_command(ffmpeg, &args)),
+    );
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    hide_console(&mut cmd);
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    let err = String::from_utf8_lossy(&out.stderr);
+    for line in err.lines().filter(|l| !l.trim().is_empty()) {
+        log::warn("ffmpeg", line.to_string());
+    }
+    if out.status.success() && job.output.exists() {
+        Ok(())
+    } else {
+        Err(err
+            .lines()
+            .last()
+            .unwrap_or("ffmpeg failed")
+            .trim()
+            .to_string())
+    }
+}
+
 /// A bundled tool next to our exe, otherwise whatever is on PATH.
 pub fn find_tool(name: &str) -> PathBuf {
     let file = if cfg!(windows) {
@@ -602,6 +649,7 @@ mod tests {
                 path: input.to_path_buf(),
                 stream: 0,
             }),
+            crop: None,
             max_height: Some(480),
             src_height: Some(1080),
             max_fps: None,
@@ -666,6 +714,36 @@ mod tests {
             println!("{}: {len} bytes", j.output.display());
             assert!(len <= 1024 * 1024, "over target");
         }
+    }
+
+    /// Cropped exports (zoomed preview): a clip with burned subs and a still frame.
+    #[test]
+    #[ignore]
+    fn real_ffmpeg_crop() {
+        let input = sample();
+        let crop = Crop {
+            x: 480,
+            y: 540,
+            width: 960,
+            height: 540,
+        };
+        let mut j = job(&input, ClipFormat::Webm, true, "crop.webm");
+        j.crop = Some(crop);
+        j.max_height = None;
+        println!("crop.webm: {} bytes", run(&j, 200));
+        let still = ffmpeg::StillJob {
+            input: input.clone(),
+            time: 21.0,
+            fps: 24000.0 / 1001.0,
+            crop: Some(crop),
+            subs: Some(SubSource::Text {
+                path: input.clone(),
+                stream: 0,
+            }),
+            output: input.parent().unwrap().join("out").join("crop-still.png"),
+        };
+        run_still(&tools().ffmpeg, &still).unwrap();
+        println!("crop-still.png written");
     }
 
     /// GIF over a longer range with all optimizations must finish in reasonable time.

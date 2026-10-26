@@ -2,13 +2,13 @@
 
 When something goes wrong, open the **Logs** tab in the side panel (or click the red warning counter
 in the status bar). It shows
-messages from weebshot, mpv and ffmpeg, and every ffmpeg command that was run — you can copy a
+messages from Weebshot, mpv and ffmpeg, and every ffmpeg command that was run — you can copy a
 command and run it in a terminal to see the full output.
 
 ## "ffmpeg not found"
 
-The release downloads include ffmpeg next to weebshot. If you removed it or built weebshot yourself,
-put `ffmpeg` next to the weebshot program, install it so it's on your `PATH`
+The release downloads include ffmpeg next to weebshot. If you removed it or built Weebshot yourself,
+put `ffmpeg` next to the Weebshot program, install it so it's on your `PATH`
 (Windows: `winget install Gyan.FFmpeg`; Linux: your package manager; macOS: `brew install ffmpeg`),
 or choose it in *Options → Export*.
 
@@ -20,7 +20,7 @@ entry to see what ffmpeg reported.
 
 ## The update didn't work
 
-Updating needs to write to the folder weebshot is in; if that's not allowed (e.g. under
+Updating needs to write to the folder Weebshot is in; if that's not allowed (e.g. under
 `Program Files`), download the new version from the release page instead. The Logs tab shows what
 went wrong. On macOS, updates are always manual.
 
@@ -50,7 +50,7 @@ aren't shown in the lane — marking with [X](key:MarkSubtitleLine) still works 
 ## Scrubbing feels slow
 
 Seeking to an exact frame means decoding from the previous keyframe, which takes longer on
-high-bitrate or HEVC/AV1 releases. weebshot never lets seeks pile up, but each one still takes as
+high-bitrate or HEVC/AV1 releases. Weebshot never lets seeks pile up, but each one still takes as
 long as it takes. Tips: scrub zoomed out (fast keyframe previews), then fine-tune with the arrow keys
 or the shuttle. Hardware decoding (*Options → Playback*) usually helps.
 
@@ -60,7 +60,7 @@ Turn off *Hardware decoding* in *Options → Playback*.
 
 ## Resetting everything
 
-Settings are stored in one file. Delete it while weebshot is closed to start fresh:
+Settings are stored in one file. Delete it while Weebshot is closed to start fresh:
 
 | System | Location |
 | --- | --- |

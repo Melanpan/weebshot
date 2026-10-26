@@ -1,6 +1,6 @@
 # Keyboard shortcuts
 
-Default bindings. Every one can be changed in *Options → Shortcuts*; the help inside weebshot always shows your current ones.
+Default bindings. Every one can be changed in *Options → Shortcuts*; the help inside Weebshot always shows your current ones.
 
 ### General
 
@@ -56,6 +56,14 @@ Default bindings. Every one can be changed in *Options → Shortcuts*; the help 
 | --- | --- |
 | Switch Inspector / Queue | `Ctrl+J` |
 | Fullscreen | `F11` |
+
+### Preview
+
+| Action | Shortcut |
+| --- | --- |
+| Zoom preview in | `Ctrl+=` |
+| Zoom preview out | `Ctrl+-` |
+| Fit preview to window | `Ctrl+0` |
 
 ### Timeline
 

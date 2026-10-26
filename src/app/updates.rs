@@ -44,7 +44,7 @@ impl App {
         let open = super::native_window(
             ctx,
             "update",
-            "weebshot — Updates",
+            "Weebshot — Updates",
             [560.0, 440.0],
             [420.0, 260.0],
             |ui| {
@@ -64,7 +64,7 @@ impl App {
 
     fn update_contents(&mut self, ui: &mut egui::Ui) {
         let p = self.palette;
-        ui.label(format!("You have weebshot {}.", update::current_version()));
+        ui.label(format!("You have Weebshot {}.", update::current_version()));
         ui.add_space(8.0);
         match self.updater.state.clone() {
             State::Idle => {
@@ -98,14 +98,14 @@ impl App {
             State::Installing => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Downloading and installing… weebshot restarts when it's done.");
+                    ui.label("Downloading and installing… Weebshot restarts when it's done.");
                 });
             }
             State::ReadyToRestart => {
                 ui.label("Restarting…");
             }
             State::Available(release) => {
-                ui.heading(format!("weebshot {} is available", release.version));
+                ui.heading(format!("Weebshot {} is available", release.version));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let can_install = update::can_self_update() && release.download.is_some();
@@ -133,7 +133,7 @@ impl App {
                 } else if self.jobs_active() > 0 {
                     ui.colored_label(
                         p.warn,
-                        "Exports are still running; updating restarts weebshot and stops them.",
+                        "Exports are still running; updating restarts Weebshot and stops them.",
                     );
                 }
                 ui.add_space(8.0);

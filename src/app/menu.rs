@@ -155,7 +155,7 @@ impl App {
                     self.updater.check(ui.ctx());
                     self.ui.show_update = true;
                 }
-                if ui.button("About weebshot").clicked() {
+                if ui.button("About Weebshot").clicked() {
                     self.ui.show_about = true;
                 }
             });

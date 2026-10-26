@@ -1,11 +1,11 @@
 # Getting started
 
-![The weebshot mascot](images/mascot.png)
+![The Weebshot mascot](images/mascot.png)
 
-weebshot is a small tool for grabbing **screenshots** and cutting **clips** (WebM, MP4, MKV, GIF,
+Weebshot is a small tool for grabbing **screenshots** and cutting **clips** (WebM, MP4, MKV, GIF,
 animated WebP) out of anime episodes — with or without the subtitles burned in.
 
-![weebshot with an episode open](images/main.jpg)
+![Weebshot with an episode open](images/main.jpg)
 
 ## The 30-second version
 
@@ -26,12 +26,12 @@ wheel in the status bar).
 
 Nothing extra: the downloads include everything (see [Installing & updating](install.md)).
 
-weebshot uses two helper programs, which it looks for next to itself first and then on your `PATH`:
+Weebshot uses two helper programs, which it looks for next to itself first and then on your `PATH`:
 
 - **ffmpeg** — clip exports, and reading thumbnails, the audio waveform and subtitle timings.
 - **gifsicle** *(optional)* — makes GIFs noticeably smaller.
 
-If you built weebshot yourself, install them separately or point to them in *Options → Export*.
+If you built Weebshot yourself, install them separately or point to them in *Options → Export*.
 
 ## Help inside the app
 
