@@ -9,7 +9,7 @@ WebM, MP4, MKV, GIF or animated WebP — with the subtitles burned in, without t
 [![Release](https://img.shields.io/github/v/release/Melanpan/weebshot?sort=semver)](https://github.com/Melanpan/weebshot/releases/latest)
 [![CI](https://github.com/Melanpan/weebshot/actions/workflows/ci.yml/badge.svg)](https://github.com/Melanpan/weebshot/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS%20%28Apple%20Silicon%29-lightgrey)
 
 > [!WARNING]
 > **This project was vibecoded** — written largely by an AI coding assistant, with a human steering
@@ -91,6 +91,8 @@ More in [Installing & updating](docs/install.md).
 
 ![Gruvbox theme](docs/images/theme-gruvbox.jpg)
 
+![weebshot on macOS](docs/images/macos.jpg)
+
 </details>
 
 ## Documentation
@@ -130,7 +132,7 @@ cargo run --release
 ./scripts/package-linux.sh        # optional: AppImage in dist/
 ```
 
-**macOS**:
+**macOS** (Apple Silicon only):
 
 ```sh
 brew install mpv ffmpeg gifsicle

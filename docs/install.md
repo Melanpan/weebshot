@@ -30,7 +30,7 @@ Fedora and Arch). If it doesn't start, your system may be missing FUSE — insta
 3. The app isn't notarized by Apple, so the first time, **right-click it → Open → Open**. After that
    it opens normally.
 
-The macOS build is newer than the others and less tested — please report anything odd.
+There is no build for Intel Macs. The macOS build is newer than the others and less tested — please report anything odd.
 
 ## Updates
 
