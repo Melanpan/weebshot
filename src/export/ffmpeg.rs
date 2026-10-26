@@ -109,6 +109,11 @@ impl ClipJob {
                 // conversion is unaffected (verified byte-identical), so just tag it.
                 filters.push("setparams=color_trc=iec61966-2-1".into());
             }
+            if self.format == ClipFormat::Webp {
+                // Hand libwebp RGB: it converts with the matrix WebP decoders assume, and
+                // scores better at the same size than ffmpeg's yuv420p.
+                filters.push("format=bgra".into());
+            }
         } else {
             if let Some(fps) = self.max_fps
                 && self.src_fps.is_none_or(|src| f64::from(fps) < src - 0.01)
@@ -228,7 +233,7 @@ impl ClipJob {
                 "-loop",
                 "0",
                 "-compression_level",
-                "5",
+                "6",
             ])
             .collect(),
         };
@@ -251,9 +256,9 @@ impl ClipJob {
             }
             if self.format == ClipFormat::Webp {
                 let qv = match q {
-                    Quality::Small => 60,
-                    Quality::Balanced => 75,
-                    Quality::High => 90,
+                    Quality::Small => 70,
+                    Quality::Balanced => 85,
+                    Quality::High => 92,
                 };
                 args.extend(["-q:v".into(), qv.to_string()]);
             }
@@ -565,6 +570,13 @@ mod tests {
         j.max_height = Some(1080);
         j.src_height = Some(720);
         assert!(!j.video_chain().1.iter().any(|f| f.starts_with("scale=")));
+    }
+
+    #[test]
+    fn webp_gets_rgb_input() {
+        let j = job(ClipFormat::Webp);
+        assert_eq!(j.video_chain().1.last().unwrap(), "format=bgra");
+        assert!(joined(&j.build_steps(&tmp()).unwrap()[0]).contains("-q:v 85"));
     }
 
     #[test]
