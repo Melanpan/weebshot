@@ -1,6 +1,6 @@
-<img src="assets/mascot.png" alt="weebshot mascot: a girl in a director's chair holding a clapperboard" align="right" width="230">
-
 # weebshot
+
+<img src="assets/mascot.png" alt="weebshot mascot: a girl in a director's chair holding a clapperboard" align="right" width="230">
 
 **Frame-accurate anime screenshot & clip maker.**
 Open an episode, find the exact frame or line, and save a full-resolution screenshot or cut a
