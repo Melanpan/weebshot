@@ -85,6 +85,8 @@ pub struct Settings {
     pub target_mb: f64,
     /// `None` = keep source resolution (video formats).
     pub max_height: Option<u32>,
+    /// `None` = keep source frame rate (video formats).
+    pub max_fps: Option<u32>,
     /// Height for GIF/WebP; these get huge at full resolution.
     pub anim_height: Option<u32>,
     pub anim_fps: u32,
@@ -144,6 +146,7 @@ impl Default for Settings {
             use_target_size: false,
             target_mb: 8.0,
             max_height: None,
+            max_fps: None,
             anim_height: Some(360),
             anim_fps: 15,
             anim: AnimOptions::default(),

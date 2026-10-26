@@ -546,6 +546,8 @@ impl App {
                 s.max_height
             },
             src_height: self.player.video_height,
+            max_fps: s.max_fps,
+            src_fps: Some(self.player.fps),
             fps: s.anim_fps,
             anim: s.anim,
             encoder: s.encoder.clone(),

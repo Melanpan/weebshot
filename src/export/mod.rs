@@ -294,6 +294,9 @@ pub struct ClipJob {
     pub subs: Option<SubSource>,
     pub max_height: Option<u32>,
     pub src_height: Option<u32>,
+    /// Frame rate cap for video formats; never raises the source rate.
+    pub max_fps: Option<u32>,
+    pub src_fps: Option<f64>,
     /// Frame rate for GIF/WebP.
     pub fps: u32,
     pub anim: AnimOptions,
@@ -601,6 +604,8 @@ mod tests {
             }),
             max_height: Some(480),
             src_height: Some(1080),
+            max_fps: None,
+            src_fps: Some(23.976),
             fps: 10,
             anim: AnimOptions::default(),
             encoder: EncoderOptions::default(),

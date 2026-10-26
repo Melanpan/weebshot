@@ -31,6 +31,7 @@ Cuts are frame-accurate (the clip is re-encoded, not stream-copied).
 ## Resolution and audio
 
 - **Resolution** — *Original* or a maximum height (1080p … 240p). Never upscales.
+- **Frame rate** — *Original* or a maximum (60 … 12 fps). Never adds frames above the source rate.
 - **Include audio** — uses the audio track selected under **Tracks**, downmixed to stereo.
 
 ## Subtitles
