@@ -16,6 +16,17 @@ const RULER_H: f32 = 22.0;
 const VIDEO_H: f32 = 58.0;
 const SUBS_H: f32 = 26.0;
 const AUDIO_H: f32 = 36.0;
+/// Header row (zoom buttons, lane toggles) plus panel margins.
+const HEADER_H: f32 = 34.0;
+
+/// Panel height that fits the visible lanes exactly, with no empty space below them.
+pub fn fitted_height(show_audio: bool, show_subs: bool) -> f32 {
+    HEADER_H
+        + RULER_H
+        + VIDEO_H
+        + if show_audio { AUDIO_H } else { 0.0 }
+        + if show_subs { SUBS_H } else { 0.0 }
+}
 /// Smallest visible span (seconds).
 const MIN_SPAN: f64 = 0.4;
 

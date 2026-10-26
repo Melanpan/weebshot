@@ -44,12 +44,18 @@ fn main() -> eframe::Result {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Weebshot")
-        .with_inner_size([1440.0, 900.0])
+        .with_inner_size([1600.0, 960.0])
         .with_min_inner_size([960.0, 600.0])
         .with_drag_and_drop(true)
         .with_icon(app::app_icon());
     if script.is_some() {
-        viewport = viewport.with_resizable(false);
+        // Docs screenshots: a fixed, reproducible window.
+        viewport = viewport
+            .with_inner_size([1440.0, 900.0])
+            .with_resizable(false);
+    } else {
+        // An editor wants the whole screen; once resized, eframe remembers the user's size.
+        viewport = viewport.with_maximized(true);
     }
     let options = eframe::NativeOptions {
         viewport,

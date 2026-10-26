@@ -1305,10 +1305,12 @@ impl eframe::App for App {
         egui::Panel::bottom("status")
             .frame(panel_frame)
             .show(ui, |ui| self.status_bar(ui));
+        let fitted =
+            timeline::fitted_height(self.settings.show_audio_lane, self.settings.show_sub_lane);
         egui::Panel::bottom("timeline")
             .resizable(true)
-            .default_size(230.0)
-            .min_size(170.0)
+            .default_size(fitted)
+            .min_size(fitted.min(140.0))
             .frame(
                 egui::Frame::new()
                     .fill(self.palette.bg1)
@@ -1318,7 +1320,7 @@ impl eframe::App for App {
         if self.settings.show_inspector {
             egui::Panel::right("side")
                 .resizable(true)
-                .default_size(360.0)
+                .default_size(440.0)
                 .min_size(280.0)
                 .frame(
                     egui::Frame::new()
@@ -1354,6 +1356,11 @@ impl eframe::App for App {
             return;
         }
         eframe::set_value(storage, eframe::APP_KEY, &self.settings);
+    }
+
+    /// The docs screenshot run must not pick up (or overwrite) the user's panel sizes.
+    fn persist_egui_memory(&self) -> bool {
+        self.script.is_none()
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
