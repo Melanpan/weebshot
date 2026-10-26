@@ -19,10 +19,10 @@ The frame is saved by the video player itself, so it is:
 
   Subtitle options are disabled when no subtitle track is selected.
 
-## Crop to preview
+## Match preview (zoom)
 
 When you zoom into the preview (the zoom buttons under it, or Ctrl+wheel over the picture),
-**Crop to preview** saves exactly what you see instead of the whole frame — handy for a
+**Match preview (zoom)** saves exactly what you see instead of the whole frame — handy for a
 close-up of a face or a sign. The size of the crop is shown next to the checkbox. Burned-in
 subtitles are drawn at their normal size at the bottom of the crop, like in the preview.
 

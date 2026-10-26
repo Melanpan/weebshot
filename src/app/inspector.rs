@@ -106,7 +106,7 @@ impl App {
         .on_disabled_hover_text("Select a subtitle track first");
     }
 
-    /// "Crop to preview" checkbox; only meaningful while the preview is zoomed in.
+    /// "Match preview (zoom)" checkbox; only meaningful while the preview is zoomed in.
     fn crop_ui(ui: &mut egui::Ui, on: &mut bool, crop: Option<Crop>, label: &str) {
         ui.add_enabled_ui(crop.is_some(), |ui| {
             ui.horizontal(|ui| {
@@ -145,7 +145,12 @@ impl App {
         });
         Self::sub_mode_ui(ui, &mut self.settings.shot_subs, has_subs);
         let crop = self.view_crop();
-        Self::crop_ui(ui, &mut self.settings.shot_crop, crop, "Crop to preview");
+        Self::crop_ui(
+            ui,
+            &mut self.settings.shot_crop,
+            crop,
+            "Match preview (zoom)",
+        );
         let ready = self.player.file.is_some();
         self.big_button(
             ui,
@@ -194,7 +199,12 @@ impl App {
         ui.weak("Subtitles");
         Self::sub_mode_ui(ui, &mut self.settings.clip_subs, has_subs);
         let crop = self.view_crop();
-        Self::crop_ui(ui, &mut self.settings.clip_crop, crop, "Crop to preview");
+        Self::crop_ui(
+            ui,
+            &mut self.settings.clip_crop,
+            crop,
+            "Match preview (zoom)",
+        );
 
         let ready = self.player.file.is_some() && self.tool_status.ffmpeg.is_ok();
         self.big_button(
