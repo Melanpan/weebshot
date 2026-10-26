@@ -243,6 +243,11 @@ impl App {
 mod tests {
     use super::*;
 
+    /// The docs are written with Windows/Linux key names; macOS formats Ctrl as Cmd.
+    fn docs_keys(s: &str) -> String {
+        s.replace("Cmd+", "Ctrl+")
+    }
+
     #[test]
     fn key_links_match_default_bindings() {
         let km = Keymap::default();
@@ -253,10 +258,11 @@ mod tests {
                 };
                 let action = action_by_name(name)
                     .unwrap_or_else(|| panic!("{title}: unknown action `{name}`"));
-                let binding = km
-                    .get(action)
-                    .expect("documented action has a default")
-                    .to_string();
+                let binding = docs_keys(
+                    &km.get(action)
+                        .expect("documented action has a default")
+                        .to_string(),
+                );
                 assert_eq!(
                     text, binding,
                     "{title}: [{text}](key:{name}) doesn't match the default binding"
@@ -315,13 +321,13 @@ mod tests {
             Some(crate::keymap::Binding::ctrl(egui::Key::P)),
         );
         let out = render("Press [S](key:Screenshot), see [GIFs](gifs.md).", &km);
-        assert_eq!(out, "Press `Ctrl+P`, see **GIFs**.");
+        assert_eq!(docs_keys(&out), "Press `Ctrl+P`, see **GIFs**.");
     }
 
     /// docs/shortcuts.md is generated; regenerate with `UPDATE_DOCS=1 cargo test`.
     #[test]
     fn shortcuts_doc_up_to_date() {
-        let expected = shortcuts_page(&Keymap::default(), false);
+        let expected = docs_keys(&shortcuts_page(&Keymap::default(), false));
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/shortcuts.md");
         if std::env::var_os("UPDATE_DOCS").is_some() {
             std::fs::write(path, &expected).unwrap();
