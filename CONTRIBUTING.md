@@ -26,9 +26,10 @@ docker run --rm -v "${PWD}:/src:ro" ubuntu:24.04 bash -c "apt-get update && apt-
 
 To release:
 
-1. Bump `version` in `Cargo.toml` and commit.
+1. Bump `version` in `Cargo.toml`, add a `## <version> — <date>` section to `CHANGELOG.md`
+   (it becomes the release notes, which the in-app updater shows), and commit.
 2. `git tag v0.2.0 && git push origin main v0.2.0`
-3. Wait for the *Release* workflow; edit the release notes on GitHub if you like. Running copies of
+3. Wait for the *Release* workflow. Running copies of
    Weebshot will offer the update within a day (asset names must stay as they are — the updater
    looks for them).
 
