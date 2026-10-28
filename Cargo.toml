@@ -1,6 +1,6 @@
 [package]
 name = "weebshot"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Frame-accurate anime screenshot & clip maker: WebM/MP4/MKV/GIF with burned-in subs, file-size targets and a subtitle-aware timeline."
 license = "GPL-3.0-or-later"

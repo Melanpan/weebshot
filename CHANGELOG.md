@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-28
 
 ### New
 - **Edit subtitles on the timeline** — right-click a line to edit its text or delete it, or drag
