@@ -918,6 +918,29 @@ impl App {
         self.play_until = Some((b, Instant::now()));
     }
 
+    /// Preview the whole marked clip: play from In through to Out (or the end, if no
+    /// Out is set), then pause.
+    fn play_from_in(&mut self) {
+        let Some(a) = self.in_point else {
+            return self.error("Set an In point first");
+        };
+        let b = self.out_point.unwrap_or(self.player.duration);
+        self.play_range(a, b);
+    }
+
+    /// Preview where the Out point lands: play from the playhead to Out, then pause,
+    /// without jumping back to In first.
+    fn play_to_out(&mut self) {
+        let Some(b) = self.out_point else {
+            return self.error("Set an Out point first");
+        };
+        let a = self.player.time;
+        if a >= b {
+            return self.error("Already past the Out point");
+        }
+        self.play_range(a, b);
+    }
+
     /// Per-frame playback bookkeeping: reverse shuttle and play-a-line.
     fn tick_playback(&mut self, ctx: &egui::Context) {
         if self.shuttle < 0.0 {
@@ -1028,6 +1051,8 @@ impl App {
                     self.player.seek(t, true);
                 }
             }
+            Action::PlayFromIn => self.play_from_in(),
+            Action::PlayToOut => self.play_to_out(),
             Action::ToggleLoop => self.set_looping(!self.looping),
             Action::Screenshot => self.take_screenshot(self.settings.shot_subs),
             Action::ScreenshotClean => self.take_screenshot(SubMode::Off),

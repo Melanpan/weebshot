@@ -33,6 +33,8 @@ pub enum Action {
     ClearInOut,
     GoToIn,
     GoToOut,
+    PlayFromIn,
+    PlayToOut,
     ToggleLoop,
     Screenshot,
     ScreenshotClean,
@@ -49,7 +51,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 40] = [
         Self::Open,
         Self::Close,
         Self::Quit,
@@ -75,6 +77,8 @@ impl Action {
         Self::ClearInOut,
         Self::GoToIn,
         Self::GoToOut,
+        Self::PlayFromIn,
+        Self::PlayToOut,
         Self::ToggleLoop,
         Self::Screenshot,
         Self::ScreenshotClean,
@@ -117,6 +121,8 @@ impl Action {
             Self::ClearInOut => "Clear In/Out",
             Self::GoToIn => "Go to In point",
             Self::GoToOut => "Go to Out point",
+            Self::PlayFromIn => "Play In→Out",
+            Self::PlayToOut => "Play to Out",
             Self::ToggleLoop => "Loop In→Out",
             Self::Screenshot => "Screenshot",
             Self::ScreenshotClean => "Screenshot without subtitles",
@@ -142,7 +148,7 @@ impl Action {
             | SeekBackBig | SeekForwardBig | PrevSubtitle | NextSubtitle | ShuttleBack
             | ShuttleStop | ShuttleForward | ToggleSubtitles => "Playback",
             SetIn | SetOut | MarkSubtitleLine | DeleteSubtitleLine | ClearInOut | GoToIn
-            | GoToOut | ToggleLoop => "Marking",
+            | GoToOut | PlayFromIn | PlayToOut | ToggleLoop => "Marking",
             Screenshot | ScreenshotClean | ExportClip | ExportSubtitles => "Export",
             ZoomIn | ZoomOut | ZoomFit => "Timeline",
         }
@@ -273,6 +279,8 @@ pub fn default_binding(action: Action) -> Option<Binding> {
         ClearInOut => Binding::alt(Key::X),
         GoToIn => Binding::shift(Key::I),
         GoToOut => Binding::shift(Key::O),
+        PlayFromIn => Binding::ctrl(Key::Space),
+        PlayToOut => Binding::shift(Key::Space),
         ToggleLoop => Binding::key(Key::P),
         Screenshot => Binding::key(Key::S),
         ScreenshotClean => Binding::ctrl(Key::S),

@@ -1,4 +1,5 @@
-//! Fonts: egui's defaults plus the Phosphor icon font (MIT, assets/fonts).
+//! Fonts: egui's defaults plus the Phosphor icon font (MIT) and a Noto Sans JP fallback
+//! for Japanese/CJK text (OFL-1.1), both in assets/fonts.
 
 use std::sync::Arc;
 
@@ -26,14 +27,22 @@ pub fn install(ctx: &egui::Context) {
             FontData::from_static(include_bytes!("../assets/fonts/Phosphor-Fill.ttf")).tweak(tweak),
         ),
     );
+    fonts.font_data.insert(
+        "noto-sans-jp".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSansJP-Regular.ttf"
+        ))),
+    );
     // Icons live in the Private Use Area, so they never shadow normal text.
-    // Hack covers arrows (←→↑↓) that the proportional font lacks.
+    // Hack covers arrows (←→↑↓) that the proportional font lacks. Noto Sans JP is last:
+    // it only fills in glyphs (Japanese/CJK subtitle text) the other two don't have.
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         let list = fonts.families.entry(family).or_default();
         list.push("phosphor".into());
         if !list.iter().any(|f| f == "Hack") {
             list.push("Hack".into());
         }
+        list.push("noto-sans-jp".into());
     }
     fonts.families.insert(
         FontFamily::Name(FILL_FAMILY.into()),

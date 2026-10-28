@@ -41,6 +41,8 @@ Default bindings. Every one can be changed in *Options → Shortcuts*; the help 
 | Clear In/Out | `Alt+X` |
 | Go to In point | `Shift+I` |
 | Go to Out point | `Shift+O` |
+| Play In→Out | `Ctrl+Space` |
+| Play to Out | `Shift+Space` |
 | Loop In→Out | `P` |
 
 ### Export
