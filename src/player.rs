@@ -91,6 +91,10 @@ pub struct Player {
     seek_in_flight: Option<Instant>,
     /// Newest seek requested while one was in flight; older ones are dropped.
     pending_seek: Option<(f64, bool)>,
+    /// (path, mpv track id) of the subtitle file loaded from edited cues, if showing one.
+    edited_sub: Option<(PathBuf, i64)>,
+    /// `sid` to restore once the edited-subtitle track is removed.
+    sid_before_edit: Option<Option<i64>>,
 }
 
 /// Property observation ids.
@@ -191,6 +195,8 @@ impl Player {
             chapters: Vec::new(),
             seek_in_flight: None,
             pending_seek: None,
+            edited_sub: None,
+            sid_before_edit: None,
         })
     }
 
@@ -220,6 +226,9 @@ impl Player {
         self.chapters.clear();
         self.seek_in_flight = None;
         self.pending_seek = None;
+        // Track ids are per-file; whatever we'd loaded no longer applies.
+        self.edited_sub = None;
+        self.sid_before_edit = None;
         self.set_pause(true);
         Ok(())
     }
@@ -236,6 +245,8 @@ impl Player {
         self.video_height = None;
         self.video_width = None;
         self.video_codec = None;
+        self.edited_sub = None;
+        self.sid_before_edit = None;
     }
 
     /// Apply mpv's queued events. Call once per UI frame.
@@ -260,7 +271,18 @@ impl Player {
                         ("duration", PropValue::Double(v)) => self.duration = v,
                         ("pause", PropValue::Flag(b)) => self.paused = b,
                         ("aid", PropValue::Str(s)) => self.aid = s.parse().ok(),
-                        ("sid", PropValue::Str(s)) => self.sid = s.parse().ok(),
+                        ("sid", PropValue::Str(s)) => {
+                            let new = s.parse().ok();
+                            // Don't let mpv's report of switching to our own injected
+                            // edited-subtitle track look like the user picked a new one.
+                            let is_edit_track = self
+                                .edited_sub
+                                .as_ref()
+                                .is_some_and(|(_, id)| Some(*id) == new);
+                            if !is_edit_track {
+                                self.sid = new;
+                            }
+                        }
                         ("width", PropValue::Int64(v)) => self.video_width = Some(v as u32),
                         ("height", PropValue::Int64(v)) => self.video_height = Some(v as u32),
                         ("track-list/count", _) => reload_tracks = true,
@@ -301,6 +323,12 @@ impl Player {
         }
         if reload_tracks || file_loaded {
             self.tracks = self.read_tracks();
+            // Hide our own injected edited-subtitle track from the rest of the app —
+            // it's an implementation detail, not something the user picked.
+            if let Some((_, id)) = &self.edited_sub {
+                self.tracks
+                    .retain(|t| !(t.kind == TrackKind::Sub && t.id == *id));
+            }
         }
         if file_loaded {
             self.on_file_loaded();
@@ -429,6 +457,47 @@ impl Player {
         };
         let value = id.map_or_else(|| "no".to_string(), |id| id.to_string());
         let _ = self.mpv.set_property(prop, value.as_str());
+    }
+
+    /// Show `path` as the active subtitle track in place of whatever mpv was rendering
+    /// natively — used once cues are edited, so the preview renders the edit through
+    /// mpv itself rather than drawing a lookalike over it. Safe to call repeatedly after
+    /// rewriting the same file (e.g. after every further edit): reloads it in place
+    /// instead of piling up duplicate tracks.
+    pub fn show_edited_subs(&mut self, path: &Path) {
+        let Some(s) = path.to_str() else { return };
+        match &self.edited_sub {
+            Some((p, id)) if p == path => {
+                let id = id.to_string();
+                self.command_async(&["sub-reload", &id]);
+                return;
+            }
+            Some((_, id)) => {
+                let _ = self.mpv.command("sub-remove", &[&id.to_string()]);
+                self.edited_sub = None;
+            }
+            None => {}
+        }
+        if self.sid_before_edit.is_none() {
+            self.sid_before_edit = Some(self.sid);
+        }
+        if self.mpv.command("sub-add", &[s, "select"]).is_ok()
+            && let Ok(id) = self.mpv.get_property::<i64>("sid")
+        {
+            // `self.sid` deliberately keeps pointing at the track the user actually
+            // selected (see the `poll()` filter above) — mpv itself still renders `id`.
+            self.edited_sub = Some((path.to_path_buf(), id));
+        }
+    }
+
+    /// Remove the edited-subtitle track, if any, and restore whatever was selected before.
+    pub fn hide_edited_subs(&mut self) {
+        if let Some((_, id)) = self.edited_sub.take() {
+            let _ = self.mpv.command("sub-remove", &[&id.to_string()]);
+        }
+        if let Some(prev) = self.sid_before_edit.take() {
+            self.select_track(TrackKind::Sub, prev);
+        }
     }
 
     pub fn set_pause(&self, pause: bool) {

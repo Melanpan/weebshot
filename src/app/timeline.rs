@@ -45,6 +45,18 @@ enum Drag {
         start_x: f32,
         start_view: f64,
     },
+    /// Moving a subtitle cue (retiming); `grab` is the time under the pointer at the start.
+    SubMove {
+        idx: usize,
+        grab: f64,
+        a: f64,
+        b: f64,
+    },
+    /// Resizing one edge of a subtitle cue.
+    SubEdge {
+        idx: usize,
+        start_edge: bool,
+    },
 }
 
 pub struct TimelineState {
@@ -61,6 +73,12 @@ pub struct TimelineState {
     /// Range and thumbnail spacing the filmstrip wants decoded: (start, end, spacing).
     pub thumb_request: Option<(f64, f64, f64)>,
     last_time: f64,
+    /// A subtitle cue whose text is being edited in place: (index, buffer).
+    editing_cue: Option<(usize, String)>,
+    /// The subtitle cue clicked on, if any — sticky until another is clicked (or away),
+    /// independent of the playhead, so playback moving past it doesn't change what
+    /// `Action::DeleteSubtitleLine` would act on.
+    pub selected_cue: Option<usize>,
 }
 
 impl Default for TimelineState {
@@ -74,6 +92,8 @@ impl Default for TimelineState {
             marker_preview: None,
             thumb_request: None,
             last_time: 0.0,
+            editing_cue: None,
+            selected_cue: None,
         }
     }
 }
@@ -171,6 +191,9 @@ pub enum Event {
     /// Play from a to b, then stop (Ctrl+click on a subtitle line).
     PlayRange(f64, f64),
     Clear,
+    DeleteCue(usize),
+    EditCueText(usize, String),
+    RetimeCue(usize, f64, f64),
 }
 
 struct Data<'a> {
@@ -569,26 +592,76 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
 
     // Subtitle lane
     let mut hovered_cue: Option<&Cue> = None;
+    let mut hovered_idx: Option<usize> = None;
+    let mut cue_rects: Vec<(usize, Rect)> = Vec::new();
     let hover = resp.hover_pos();
     if d.show_sub_lane {
         match d.cues {
             Some(cues) => {
-                for cue in cues.iter().filter(|c| c.end >= vs && c.start <= vs + span) {
+                for (idx, cue) in cues
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.end >= vs && c.start <= vs + span)
+                {
                     let mut r =
                         Rect::from_x_y_ranges(x_of(cue.start)..=x_of(cue.end), subs.y_range())
                             .shrink2(vec2(0.0, 3.0));
                     if r.width() < 2.0 {
                         r = r.expand2(vec2(1.0, 0.0));
                     }
+                    cue_rects.push((idx, r));
                     let is_hovered = hover.is_some_and(|h| r.contains(h));
                     if is_hovered {
                         hovered_cue = Some(cue);
+                        hovered_idx = Some(idx);
                     }
+                    // The clicked-on, sticky selection — what Delete acts on from the
+                    // keyboard. Independent of the playhead, so playback moving past it
+                    // doesn't change what gets deleted.
+                    let is_selected = st.selected_cue == Some(idx);
                     let fill = p
                         .subtitle
                         .gamma_multiply(if is_hovered { 0.9 } else { 0.55 });
                     painter.rect_filled(r, 2.0, fill);
-                    if r.width() > 28.0 {
+                    if is_selected {
+                        painter.rect_stroke(
+                            r,
+                            2.0,
+                            Stroke::new(2.0, p.marker),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    if st.editing_cue.as_ref().is_some_and(|(i, _)| *i == idx) {
+                        let (_, buf) = st.editing_cue.as_mut().unwrap();
+                        let edit = egui::TextEdit::singleline(buf)
+                            .id_salt(("subtitle_edit", idx))
+                            .font(FontId::proportional(11.0))
+                            .desired_width(r.width().max(10.0));
+                        let out = ui.put(r, edit);
+                        // `lost_focus()` already covers Enter (TextEdit's own
+                        // surrender_focus) and Escape (egui's global clear-focus-on-Escape)
+                        // — the canonical `lost_focus() && key_pressed(Enter)` pattern.
+                        // "Clicked away" needs its own detection (nothing else in this
+                        // custom-painted canvas naturally steals focus the way a normal
+                        // widget would), but only once this field has *actually* gained
+                        // focus: otherwise the very click on "Edit text…" that opened it
+                        // — which lands outside `r`, over the context menu — reads as an
+                        // immediate click-away and discards the edit before it starts.
+                        let commit = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let clicked_away = out.has_focus()
+                            && ui.input(|i| {
+                                i.pointer.any_pressed()
+                                    && i.pointer.press_origin().is_some_and(|p| !r.contains(p))
+                            });
+                        if out.lost_focus() || clicked_away {
+                            let (idx, text) = st.editing_cue.take().unwrap();
+                            if commit {
+                                events.push(Event::EditCueText(idx, text));
+                            }
+                        } else if !out.has_focus() {
+                            out.request_focus();
+                        }
+                    } else if r.width() > 28.0 {
                         let text_painter = painter.with_clip_rect(r.shrink(2.0).intersect(track));
                         text_painter.text(
                             pos2(r.left() + 4.0, r.center().y),
@@ -732,136 +805,202 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map_or(t, |(c, _)| c)
     };
-
-    // Cursor feedback for the grabbable parts.
-    if st.drag.is_none()
-        && let Some(h) = hover
-        && track.contains(h)
-    {
-        if near_in(h.x) || near_out(h.x) {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-        } else if in_range_band(h) {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    // Subtitle cue edges/body, for retiming by drag.
+    let near_cue_edge = |pos: egui::Pos2| -> Option<(usize, bool)> {
+        if pos.y < subs.top() || pos.y > subs.bottom() {
+            return None;
         }
-    }
+        cue_rects.iter().find_map(|&(idx, r)| {
+            if (pos.x - r.left()).abs() <= 5.0 {
+                Some((idx, true))
+            } else if (pos.x - r.right()).abs() <= 5.0 {
+                Some((idx, false))
+            } else {
+                None
+            }
+        })
+    };
+    let in_cue_body = |pos: egui::Pos2| -> Option<usize> {
+        if pos.y < subs.top() || pos.y > subs.bottom() {
+            return None;
+        }
+        cue_rects
+            .iter()
+            .find(|&&(_, r)| pos.x > r.left() + 5.0 && pos.x < r.right() - 5.0)
+            .map(|&(idx, _)| idx)
+    };
 
-    if resp.drag_started()
-        && let Some(pos) = ui
-            .input(|i| i.pointer.press_origin())
-            .or(resp.interact_pointer_pos())
-    {
-        let middle = ui.input(|i| i.pointer.middle_down());
-        st.restore_time = Some(d.time);
-        st.drag = Some(if middle || ui.input(|i| i.modifiers.alt) {
-            Drag::Pan {
-                start_x: pos.x,
-                start_view: st.view_start,
+    if st.editing_cue.is_none() {
+        // Cursor feedback for the grabbable parts.
+        if st.drag.is_none()
+            && let Some(h) = hover
+            && track.contains(h)
+        {
+            if near_in(h.x) || near_out(h.x) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            } else if in_range_band(h) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            } else if near_cue_edge(h).is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            } else if in_cue_body(h).is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
-        } else if near_in(pos.x) && (!near_out(pos.x) || pos.x >= x_of(d.in_point.unwrap())) {
-            Drag::In
-        } else if near_out(pos.x) {
-            Drag::Out
-        } else if in_range_band(pos) {
-            let (a, b) = range.unwrap();
-            Drag::Range {
-                grab: t_of(pos.x),
-                a,
-                b,
-            }
-        } else {
-            Drag::Scrub
-        });
-    }
-    if resp.dragged()
-        && let (Some(drag), Some(pos)) = (st.drag, resp.interact_pointer_pos())
-    {
-        let t = snap(t_of(pos.x));
-        match drag {
-            Drag::Scrub => {
-                st.scrub = Some(t);
-                events.push(Event::Seek { t, exact: precise });
-            }
-            Drag::In => {
-                let limit = d.out_point.map_or(duration, |o| o - frame);
-                let t = snap_edge(t).min(limit);
-                st.marker_preview = Some(MarkerPreview::In(t));
-                events.push(Event::SetIn(t));
-                events.push(Event::Seek { t, exact: precise });
-            }
-            Drag::Out => {
-                let limit = d.in_point.map_or(0.0, |i| i + frame);
-                let t = snap_edge(t).max(limit);
-                st.marker_preview = Some(MarkerPreview::Out(t));
-                events.push(Event::SetOut(t));
-                events.push(Event::Seek { t, exact: precise });
-            }
-            Drag::Range { grab, a, b } => {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                let len = b - a;
-                let mut start =
-                    snap(a + (t_of(pos.x) - grab)).clamp(0.0, (duration - len).max(0.0));
-                // Snap whichever edge is close to something.
-                let snapped_start = snap_edge(start);
-                let snapped_end = snap_edge(start + len) - len;
-                if snapped_start != start {
-                    start = snapped_start;
-                } else if (snapped_end - start).abs() > 1e-9 {
-                    start = snapped_end;
+        }
+
+        if resp.drag_started()
+            && let Some(pos) = ui
+                .input(|i| i.pointer.press_origin())
+                .or(resp.interact_pointer_pos())
+        {
+            let middle = ui.input(|i| i.pointer.middle_down());
+            st.restore_time = Some(d.time);
+            st.drag = Some(if middle || ui.input(|i| i.modifiers.alt) {
+                Drag::Pan {
+                    start_x: pos.x,
+                    start_view: st.view_start,
                 }
-                st.marker_preview = Some(MarkerPreview::Range(start, start + len));
-                events.push(Event::SetRange(start, start + len));
-                events.push(Event::Seek {
-                    t: start,
-                    exact: precise,
-                });
-            }
-            Drag::Pan {
-                start_x,
-                start_view,
-            } => {
-                st.view_start = start_view - (pos.x - start_x) as f64 / px_per_sec;
-                st.clamp(duration);
+            } else if near_in(pos.x) && (!near_out(pos.x) || pos.x >= x_of(d.in_point.unwrap())) {
+                Drag::In
+            } else if near_out(pos.x) {
+                Drag::Out
+            } else if in_range_band(pos) {
+                let (a, b) = range.unwrap();
+                Drag::Range {
+                    grab: t_of(pos.x),
+                    a,
+                    b,
+                }
+            } else if let Some((idx, start_edge)) = near_cue_edge(pos) {
+                Drag::SubEdge { idx, start_edge }
+            } else if let Some(idx) = in_cue_body(pos) {
+                let c = &d.cues.unwrap()[idx];
+                Drag::SubMove {
+                    idx,
+                    grab: t_of(pos.x),
+                    a: c.start,
+                    b: c.end,
+                }
+            } else {
+                Drag::Scrub
+            });
+        }
+        if resp.dragged()
+            && let (Some(drag), Some(pos)) = (st.drag, resp.interact_pointer_pos())
+        {
+            let t = snap(t_of(pos.x));
+            match drag {
+                Drag::Scrub => {
+                    st.scrub = Some(t);
+                    events.push(Event::Seek { t, exact: precise });
+                }
+                Drag::In => {
+                    let limit = d.out_point.map_or(duration, |o| o - frame);
+                    let t = snap_edge(t).min(limit);
+                    st.marker_preview = Some(MarkerPreview::In(t));
+                    events.push(Event::SetIn(t));
+                    events.push(Event::Seek { t, exact: precise });
+                }
+                Drag::Out => {
+                    let limit = d.in_point.map_or(0.0, |i| i + frame);
+                    let t = snap_edge(t).max(limit);
+                    st.marker_preview = Some(MarkerPreview::Out(t));
+                    events.push(Event::SetOut(t));
+                    events.push(Event::Seek { t, exact: precise });
+                }
+                Drag::Range { grab, a, b } => {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    let len = b - a;
+                    let mut start =
+                        snap(a + (t_of(pos.x) - grab)).clamp(0.0, (duration - len).max(0.0));
+                    // Snap whichever edge is close to something.
+                    let snapped_start = snap_edge(start);
+                    let snapped_end = snap_edge(start + len) - len;
+                    if snapped_start != start {
+                        start = snapped_start;
+                    } else if (snapped_end - start).abs() > 1e-9 {
+                        start = snapped_end;
+                    }
+                    st.marker_preview = Some(MarkerPreview::Range(start, start + len));
+                    events.push(Event::SetRange(start, start + len));
+                    events.push(Event::Seek {
+                        t: start,
+                        exact: precise,
+                    });
+                }
+                Drag::Pan {
+                    start_x,
+                    start_view,
+                } => {
+                    st.view_start = start_view - (pos.x - start_x) as f64 / px_per_sec;
+                    st.clamp(duration);
+                }
+                Drag::SubEdge { idx, start_edge } => {
+                    if let Some(cue) = d.cues.and_then(|c| c.get(idx)) {
+                        let (new_start, new_end) = if start_edge {
+                            (snap_edge(t).min(cue.end - frame).max(0.0), cue.end)
+                        } else {
+                            (cue.start, snap_edge(t).max(cue.start + frame).min(duration))
+                        };
+                        events.push(Event::RetimeCue(idx, new_start, new_end));
+                    }
+                }
+                Drag::SubMove { idx, grab, a, b } => {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    let len = b - a;
+                    let start =
+                        snap(a + (t_of(pos.x) - grab)).clamp(0.0, (duration - len).max(0.0));
+                    events.push(Event::RetimeCue(idx, start, start + len));
+                }
             }
         }
-    }
-    if resp.drag_stopped() {
-        match (st.drag, st.restore_time) {
-            (Some(Drag::Scrub), _) => {
-                if let Some(t) = resp.interact_pointer_pos().map(|p| snap(t_of(p.x))) {
+        if resp.drag_stopped() {
+            match (st.drag, st.restore_time) {
+                (Some(Drag::Scrub), _) => {
+                    if let Some(t) = resp.interact_pointer_pos().map(|p| snap(t_of(p.x))) {
+                        events.push(Event::Seek { t, exact: true });
+                    }
+                }
+                // The preview showed the marker's frame while dragging; go back.
+                (Some(Drag::In | Drag::Out | Drag::Range { .. }), Some(t)) => {
                     events.push(Event::Seek { t, exact: true });
                 }
+                _ => {}
             }
-            // The preview showed the marker's frame while dragging; go back.
-            (Some(Drag::In | Drag::Out | Drag::Range { .. }), Some(t)) => {
-                events.push(Event::Seek { t, exact: true });
-            }
-            _ => {}
+            st.drag = None;
+            st.scrub = None;
+            st.restore_time = None;
+            st.marker_preview = None;
         }
-        st.drag = None;
-        st.scrub = None;
-        st.restore_time = None;
-        st.marker_preview = None;
-    }
 
-    let ctrl = ui.input(|i| i.modifiers.command);
-    if resp.double_clicked() {
-        if let Some(cue) = hovered_cue {
-            events.push(Event::SetRange(cue.start, cue.end));
-        }
-    } else if resp.clicked()
-        && let Some(pos) = resp.interact_pointer_pos()
-        && track.contains(pos)
-    {
-        match hovered_cue {
-            Some(cue) if ctrl => events.push(Event::PlayRange(cue.start, cue.end)),
-            Some(cue) => events.push(Event::Seek {
-                t: cue.start,
-                exact: true,
-            }),
-            None => events.push(Event::Seek {
-                t: snap(t_of(pos.x)),
-                exact: true,
-            }),
+        let ctrl = ui.input(|i| i.modifiers.command);
+        if resp.double_clicked() {
+            if let Some(cue) = hovered_cue {
+                events.push(Event::SetRange(cue.start, cue.end));
+            }
+        } else if resp.clicked()
+            && let Some(pos) = resp.interact_pointer_pos()
+            && track.contains(pos)
+        {
+            match hovered_cue {
+                Some(cue) if ctrl => {
+                    st.selected_cue = hovered_idx;
+                    events.push(Event::PlayRange(cue.start, cue.end));
+                }
+                Some(cue) => {
+                    st.selected_cue = hovered_idx;
+                    events.push(Event::Seek {
+                        t: cue.start,
+                        exact: true,
+                    });
+                }
+                None => {
+                    st.selected_cue = None;
+                    events.push(Event::Seek {
+                        t: snap(t_of(pos.x)),
+                        exact: true,
+                    });
+                }
+            }
         }
     }
 
@@ -911,7 +1050,7 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
                 ui.add_space(2.0);
                 ui.label(
                     RichText::new(
-                        "Click: go to line\nDouble-click: mark as In/Out\nCtrl+click: play just this line",
+                        "Click: select this line (outlined) and go to it — Delete removes the selected line\nDouble-click: mark as In/Out\nCtrl+click: play just this line\nRight-click: edit or delete this line",
                     )
                     .weak()
                     .small(),
@@ -947,12 +1086,25 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
         if ui.button("Set Out here").clicked() {
             events.push(Event::SetOut(t));
         }
-        if let Some(cue) = hovered_cue.or_else(|| {
-            d.cues
-                .and_then(|c| c.iter().find(|c| c.start <= t && t < c.end))
-        }) && ui.button("Mark this subtitle line").clicked()
+        let menu_cue: Option<(usize, &Cue)> = hovered_idx.zip(hovered_cue).or_else(|| {
+            d.cues.and_then(|c| {
+                c.iter()
+                    .enumerate()
+                    .find(|(_, cue)| cue.start <= t && t < cue.end)
+            })
+        });
+        if let Some((_, cue)) = menu_cue
+            && ui.button("Mark this subtitle line").clicked()
         {
             events.push(Event::SetRange(cue.start, cue.end));
+        }
+        if let Some((idx, cue)) = menu_cue {
+            if ui.button("Edit text…").clicked() {
+                st.editing_cue = Some((idx, cue.text.clone()));
+            }
+            if ui.button("Delete subtitle").clicked() {
+                events.push(Event::DeleteCue(idx));
+            }
         }
         if ui.button("Clear In/Out").clicked() {
             events.push(Event::Clear);
@@ -1001,8 +1153,9 @@ impl App {
                     let i = self.settings.keymap.text(Action::SetIn);
                     let o = self.settings.keymap.text(Action::SetOut);
                     let x = self.settings.keymap.text(Action::MarkSubtitleLine);
+                    let del = self.settings.keymap.text(Action::DeleteSubtitleLine);
                     ui.weak(format!(
-                        "{i}/{o} set In/Out · {x} marks the current subtitle line · wheel zooms · Alt-drag pans"
+                        "{i}/{o} set In/Out · {x} marks the current subtitle line · click a line to select it (outlined), {del} deletes it · wheel zooms · Alt-drag pans"
                     ));
                 }
             });
@@ -1047,6 +1200,9 @@ impl App {
                 Event::SetRange(a, b) => self.set_range(a, b),
                 Event::PlayRange(a, b) => self.play_range(a, b),
                 Event::Clear => self.pending.push(Action::ClearInOut),
+                Event::DeleteCue(idx) => self.delete_cue(idx),
+                Event::EditCueText(idx, text) => self.set_cue_text(idx, text),
+                Event::RetimeCue(idx, a, b) => self.retime_cue(idx, a, b),
             }
         }
     }

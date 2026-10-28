@@ -37,6 +37,7 @@ Default bindings. Every one can be changed in *Options → Shortcuts*; the help 
 | Set In point | `I` |
 | Set Out point | `O` |
 | Mark current subtitle line as In/Out | `X` |
+| Delete selected subtitle line | `Delete` |
 | Clear In/Out | `Alt+X` |
 | Go to In point | `Shift+I` |
 | Go to Out point | `Shift+O` |
@@ -49,6 +50,7 @@ Default bindings. Every one can be changed in *Options → Shortcuts*; the help 
 | Screenshot | `S` |
 | Screenshot without subtitles | `Ctrl+S` |
 | Export clip | `E` |
+| Save subtitles as… | `Alt+S` |
 
 ### General
 

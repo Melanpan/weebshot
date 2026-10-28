@@ -29,6 +29,7 @@ pub enum Action {
     SetIn,
     SetOut,
     MarkSubtitleLine,
+    DeleteSubtitleLine,
     ClearInOut,
     GoToIn,
     GoToOut,
@@ -36,6 +37,7 @@ pub enum Action {
     Screenshot,
     ScreenshotClean,
     ExportClip,
+    ExportSubtitles,
     ToggleDock,
     Fullscreen,
     ViewZoomIn,
@@ -47,7 +49,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 38] = [
         Self::Open,
         Self::Close,
         Self::Quit,
@@ -69,6 +71,7 @@ impl Action {
         Self::SetIn,
         Self::SetOut,
         Self::MarkSubtitleLine,
+        Self::DeleteSubtitleLine,
         Self::ClearInOut,
         Self::GoToIn,
         Self::GoToOut,
@@ -76,6 +79,7 @@ impl Action {
         Self::Screenshot,
         Self::ScreenshotClean,
         Self::ExportClip,
+        Self::ExportSubtitles,
         Self::ToggleDock,
         Self::Fullscreen,
         Self::ViewZoomIn,
@@ -109,6 +113,7 @@ impl Action {
             Self::SetIn => "Set In point",
             Self::SetOut => "Set Out point",
             Self::MarkSubtitleLine => "Mark current subtitle line as In/Out",
+            Self::DeleteSubtitleLine => "Delete selected subtitle line",
             Self::ClearInOut => "Clear In/Out",
             Self::GoToIn => "Go to In point",
             Self::GoToOut => "Go to Out point",
@@ -116,6 +121,7 @@ impl Action {
             Self::Screenshot => "Screenshot",
             Self::ScreenshotClean => "Screenshot without subtitles",
             Self::ExportClip => "Export clip",
+            Self::ExportSubtitles => "Save subtitles as…",
             Self::ToggleDock => "Switch Inspector / Queue",
             Self::Fullscreen => "Fullscreen",
             Self::ViewZoomIn => "Zoom preview in",
@@ -135,10 +141,9 @@ impl Action {
             PlayPause | FrameBack | FrameForward | SeekBackSmall | SeekForwardSmall
             | SeekBackBig | SeekForwardBig | PrevSubtitle | NextSubtitle | ShuttleBack
             | ShuttleStop | ShuttleForward | ToggleSubtitles => "Playback",
-            SetIn | SetOut | MarkSubtitleLine | ClearInOut | GoToIn | GoToOut | ToggleLoop => {
-                "Marking"
-            }
-            Screenshot | ScreenshotClean | ExportClip => "Export",
+            SetIn | SetOut | MarkSubtitleLine | DeleteSubtitleLine | ClearInOut | GoToIn
+            | GoToOut | ToggleLoop => "Marking",
+            Screenshot | ScreenshotClean | ExportClip | ExportSubtitles => "Export",
             ZoomIn | ZoomOut | ZoomFit => "Timeline",
         }
     }
@@ -264,6 +269,7 @@ pub fn default_binding(action: Action) -> Option<Binding> {
         SetIn => Binding::key(Key::I),
         SetOut => Binding::key(Key::O),
         MarkSubtitleLine => Binding::key(Key::X),
+        DeleteSubtitleLine => Binding::key(Key::Delete),
         ClearInOut => Binding::alt(Key::X),
         GoToIn => Binding::shift(Key::I),
         GoToOut => Binding::shift(Key::O),
@@ -271,6 +277,7 @@ pub fn default_binding(action: Action) -> Option<Binding> {
         Screenshot => Binding::key(Key::S),
         ScreenshotClean => Binding::ctrl(Key::S),
         ExportClip => Binding::key(Key::E),
+        ExportSubtitles => Binding::alt(Key::S),
         ToggleDock => Binding::ctrl(Key::J),
         Fullscreen => Binding::key(Key::F11),
         ViewZoomIn => Binding::ctrl(Key::Equals),
@@ -376,8 +383,13 @@ impl Keymap {
         self.get(action).map(|b| b.to_string()).unwrap_or_default()
     }
 
-    /// Actions triggered by this frame's key presses.
+    /// Actions triggered by this frame's key presses. None while a text field (e.g. the
+    /// subtitle inline editor) has focus, so typing doesn't also fire single-letter
+    /// shortcuts like Screenshot (`S`) or Mark subtitle line (`X`).
     pub fn triggered(&self, ctx: &egui::Context) -> Vec<Action> {
+        if ctx.text_edit_focused() {
+            return Vec::new();
+        }
         ctx.input(|i| {
             let mut out = Vec::new();
             for ev in &i.events {

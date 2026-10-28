@@ -102,6 +102,8 @@ impl App {
             ui.menu_button("Export", |ui| {
                 self.menu_item(ui, Action::Screenshot, "Screenshot", loaded);
                 self.menu_item(ui, Action::ExportClip, "Export clip", loaded);
+                let has_cues = self.cues.as_ref().is_some_and(|c| !c.cues.is_empty());
+                self.menu_item(ui, Action::ExportSubtitles, "Save subtitles as…", has_cues);
                 ui.separator();
                 if ui.button("Show queue").clicked() {
                     self.settings.show_inspector = true;

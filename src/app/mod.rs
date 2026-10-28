@@ -402,6 +402,66 @@ impl App {
         }
     }
 
+    /// Delete the cue selected by clicking it in the timeline (`Action::DeleteSubtitleLine`,
+    /// `Delete` by default) — the keyboard-driven counterpart to the timeline's right-click
+    /// "Delete subtitle". Deliberately not playhead-based: that would delete whatever line
+    /// happened to be on screen, which can change out from under you while playing.
+    fn delete_current_subtitle_line(&mut self) {
+        match self.timeline.selected_cue {
+            Some(idx) => {
+                self.delete_cue(idx);
+                self.info("Deleted subtitle line");
+            }
+            None => self.error("Click a subtitle line first to select it"),
+        }
+    }
+
+    fn delete_cue(&mut self, idx: usize) {
+        if let Some(c) = &mut self.cues {
+            c.delete(idx);
+        }
+        // Indices after the deleted one shift down; a selection on the deleted line itself
+        // no longer refers to anything.
+        self.timeline.selected_cue = match self.timeline.selected_cue {
+            Some(i) if i == idx => None,
+            Some(i) if i > idx => Some(i - 1),
+            other => other,
+        };
+        self.sync_preview_subs();
+    }
+
+    fn set_cue_text(&mut self, idx: usize, text: String) {
+        if let Some(c) = &mut self.cues {
+            c.set_text(idx, text);
+        }
+        self.sync_preview_subs();
+    }
+
+    fn retime_cue(&mut self, idx: usize, a: f64, b: f64) {
+        if let Some(c) = &mut self.cues {
+            c.retime(idx, a, b);
+        }
+        self.sync_preview_subs();
+    }
+
+    /// Once cues are edited, mpv shows them from a scratch .ass (reusing the original
+    /// styles) instead of natively rendering the original track — there's no way to
+    /// patch just one line of that in place. Rewritten and reloaded after every further
+    /// edit; reverted once the edits no longer apply (track switched, or every line
+    /// deleted).
+    fn sync_preview_subs(&mut self) {
+        match &self.cues {
+            Some(loader) if loader.dirty && !loader.cues.is_empty() => {
+                let path = std::env::temp_dir()
+                    .join(format!("weebshot-{}-preview.subs.ass", std::process::id()));
+                if loader.write_to(&path).is_ok() {
+                    self.player.show_edited_subs(&path);
+                }
+            }
+            _ => self.player.hide_edited_subs(),
+        }
+    }
+
     /// Subtitle mode that actually applies: forced off when no subtitle track is active.
     fn effective_sub_mode(&self, mode: SubMode) -> SubMode {
         if self.player.sid.is_some() {
@@ -413,6 +473,24 @@ impl App {
 
     // ---- subtitle cues for the timeline ---------------------------------
 
+    /// The cue source matching the current subtitle track, if it's text-based.
+    fn cue_source(&self) -> Option<CueSource> {
+        let t = self.player.current(TrackKind::Sub)?;
+        if t.is_bitmap_sub() {
+            return None;
+        }
+        Some(match &t.external {
+            Some(p) => CueSource {
+                file: p.clone(),
+                ff_index: None,
+            },
+            None => CueSource {
+                file: self.player.file.clone()?,
+                ff_index: t.ff_index,
+            },
+        })
+    }
+
     fn update_cues(&mut self, ctx: &egui::Context) {
         if let Some(c) = &mut self.cues {
             c.poll();
@@ -420,29 +498,18 @@ impl App {
         if !self.settings.show_sub_lane || self.tool_status.ffmpeg.is_err() {
             return;
         }
-        let wanted = self.player.current(TrackKind::Sub).and_then(|t| {
-            if t.is_bitmap_sub() {
-                return None;
-            }
-            Some(match &t.external {
-                Some(p) => CueSource {
-                    file: p.clone(),
-                    ff_index: None,
-                },
-                None => CueSource {
-                    file: self.player.file.clone()?,
-                    ff_index: t.ff_index,
-                },
-            })
-        });
+        let wanted = self.cue_source();
         match (wanted, &self.cues) {
-            (Some(w), Some(c)) if c.source == w => {}
+            (Some(w), Some(c)) if c.source == w => return,
             (Some(w), _) => {
                 self.cues = Some(CueLoader::spawn(self.tools.ffmpeg.clone(), w, ctx.clone()));
             }
             (None, Some(_)) => self.cues = None,
-            (None, None) => {}
+            (None, None) => return,
         }
+        // The track changed: any previous edits/selection no longer apply.
+        self.timeline.selected_cue = None;
+        self.sync_preview_subs();
     }
 
     /// Subtitle cues are read first so the subtitle lane shows up quickly; thumbnails and the
@@ -580,6 +647,25 @@ impl App {
             let ff_index = track.ff_index.ok_or("Subtitle track has no stream index")?;
             return Ok(Some(SubSource::Bitmap { ff_index }));
         }
+        // Edited cues (delete/retime/edit text) for the current track — burn those in
+        // instead of the original file, by writing them to a scratch .ass that reuses
+        // the original style definitions. Only kicks in once actually edited, so an
+        // untouched track keeps its original styling exactly. Not cleaned up immediately:
+        // a queued export job may still be reading it.
+        if let Some(loader) = &self.cues
+            && loader.dirty
+            && !loader.loading()
+            && !loader.cues.is_empty()
+            && self.cue_source().is_some_and(|w| w == loader.source)
+        {
+            let path = std::env::temp_dir().join(format!(
+                "weebshot-{}-{}.subs.ass",
+                std::process::id(),
+                self.next_job_id
+            ));
+            loader.write_to(&path).map_err(|e| e.to_string())?;
+            return Ok(Some(SubSource::Text { path, stream: 0 }));
+        }
         Ok(Some(match &track.external {
             Some(path) => SubSource::Text {
                 path: path.clone(),
@@ -666,6 +752,26 @@ impl App {
         }
         let n = self.jobs_active();
         self.info(format!("Export queued ({n} in queue) — see the Queue tab"));
+    }
+
+    fn export_subtitles(&mut self) {
+        let Some(loader) = &self.cues else {
+            return self.error("No subtitles loaded — show the Subtitles lane first");
+        };
+        if loader.cues.is_empty() {
+            return self.error("No subtitle lines to save");
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("subtitles.ass")
+            .add_filter("Advanced SubStation Alpha", &["ass"])
+            .save_file()
+        else {
+            return;
+        };
+        match loader.write_to(&path) {
+            Ok(()) => self.info(format!("Saved {}", path.display())),
+            Err(e) => self.error(format!("Couldn't save subtitles: {e}")),
+        }
     }
 
     fn submit(&mut self, job: ClipJob) {
@@ -906,6 +1012,7 @@ impl App {
             Action::SetIn => self.set_in_at(self.player.time),
             Action::SetOut => self.set_out_at(self.player.time),
             Action::MarkSubtitleLine => self.mark_subtitle_line(),
+            Action::DeleteSubtitleLine => self.delete_current_subtitle_line(),
             Action::ClearInOut => {
                 self.in_point = None;
                 self.out_point = None;
@@ -929,6 +1036,7 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
             }
             Action::ExportClip => self.export_clip(),
+            Action::ExportSubtitles => self.export_subtitles(),
             Action::ToggleDock => {
                 self.settings.show_inspector = true;
                 self.ui.side_tab = if self.ui.side_tab == SideTab::Inspector {
