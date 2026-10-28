@@ -200,6 +200,13 @@ impl ClipJob {
                 "format=yuv420p".into()
             });
         }
+        if self.loop_count > 1 {
+            // `size` just needs to safely cover the whole (already `-ss`/`-t` trimmed)
+            // clip — ffmpeg stops capturing at EOF regardless, so there's no need to
+            // compute an exact frame count. Capped at the filter's own hard limit of
+            // 32767 frames (~22 min at 24fps), well past what this feature is for.
+            filters.push(format!("loop=loop={}:size=32767:start=0", self.loop_count - 1));
+        }
         (input, filters)
     }
 
@@ -350,7 +357,7 @@ impl ClipJob {
             ClipFormat::Mp4 => "aac",
             _ => "libopus",
         };
-        vec![
+        let mut args = vec![
             "-map".into(),
             format!("0:{idx}"),
             "-c:a".into(),
@@ -359,7 +366,18 @@ impl ClipJob {
             format!("{}k", self.audio_kbps()),
             "-ac".into(),
             "2".into(),
-        ]
+        ];
+        if self.loop_count > 1 {
+            // Same idea as the video `loop` filter above: a size far larger than any
+            // clip's sample count, so ffmpeg just captures everything up to EOF and
+            // loops that (audio has no 32767-ish cap, unlike the video filter).
+            args.push("-af".into());
+            args.push(format!(
+                "aloop=loop={}:size=2000000000:start=0",
+                self.loop_count - 1
+            ));
+        }
+        args
     }
 
     fn output_args(&self) -> Vec<String> {
@@ -585,6 +603,7 @@ mod tests {
             anim: AnimOptions::default(),
             encoder: EncoderOptions::default(),
             use_gifsicle: false,
+            loop_count: 1,
             output: PathBuf::from(r"C:\out\clip.webm"),
         }
     }
@@ -705,6 +724,23 @@ mod tests {
         assert!(j.video_chain().1.contains(&"fps=12".to_string()));
         j.max_fps = Some(24);
         assert!(!j.video_chain().1.iter().any(|f| f.starts_with("fps=")));
+    }
+
+    #[test]
+    fn loop_count_appends_loop_filters() {
+        let mut j = job(ClipFormat::Webm);
+        assert!(!j.video_chain().1.iter().any(|f| f.starts_with("loop=")));
+        assert!(!j.audio_args().iter().any(|a| a.starts_with("aloop=")));
+
+        j.loop_count = 3;
+        assert!(
+            j.video_chain()
+                .1
+                .contains(&"loop=loop=2:size=32767:start=0".to_string())
+        );
+        let audio = j.audio_args();
+        let af_pos = audio.iter().position(|a| a == "-af").unwrap();
+        assert_eq!(audio[af_pos + 1], "aloop=loop=2:size=2000000000:start=0");
     }
 
     #[test]

@@ -720,6 +720,7 @@ impl App {
             anim: s.anim,
             encoder: s.encoder.clone(),
             use_gifsicle: self.tools.gifsicle.is_some(),
+            loop_count: s.loop_count.max(1),
             output: PathBuf::new(),
         };
         if let Err(e) = base.target_video_kbps() {

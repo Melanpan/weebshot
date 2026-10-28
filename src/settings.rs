@@ -100,6 +100,8 @@ pub struct Settings {
     /// When the preview is zoomed in, export only the visible part.
     pub clip_crop: bool,
     pub encoder: EncoderOptions,
+    /// Repeat the clip's content this many times in the output (1 = play once).
+    pub loop_count: u32,
 
     // Playback
     pub volume: f64,
@@ -162,6 +164,7 @@ impl Default for Settings {
             clip_subs: SubMode::Burned,
             clip_crop: false,
             encoder: EncoderOptions::default(),
+            loop_count: 1,
             volume: 70.0,
             audio_langs: "jpn,ja,jp".into(),
             sub_langs: "eng,en,enm".into(),

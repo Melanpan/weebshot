@@ -209,6 +209,17 @@ impl App {
             self.video_ui(ui, duration);
         }
 
+        ui.horizontal(|ui| {
+            ui.weak("Loop");
+            ui.add(egui::DragValue::new(&mut self.settings.loop_count).range(1..=20))
+                .on_hover_text("Repeat the clip's content this many times in the file");
+            ui.weak(if self.settings.loop_count > 1 {
+                "plays"
+            } else {
+                "play"
+            });
+        });
+
         let has_subs = self.player.sid.is_some();
         ui.weak("Subtitles");
         Self::sub_mode_ui(ui, &mut self.settings.clip_subs, has_subs);

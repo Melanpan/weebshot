@@ -320,6 +320,8 @@ pub struct ClipJob {
     pub encoder: EncoderOptions,
     /// Whether gifsicle is available to post-process GIFs.
     pub use_gifsicle: bool,
+    /// Repeat the clip's content this many times in the output (1 = play once).
+    pub loop_count: u32,
     pub output: PathBuf,
 }
 
@@ -658,6 +660,7 @@ mod tests {
             anim: AnimOptions::default(),
             encoder: EncoderOptions::default(),
             use_gifsicle: false,
+            loop_count: 1,
             output: out_dir.join(name),
         }
     }
