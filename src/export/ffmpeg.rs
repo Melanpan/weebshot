@@ -205,7 +205,10 @@ impl ClipJob {
             // clip — ffmpeg stops capturing at EOF regardless, so there's no need to
             // compute an exact frame count. Capped at the filter's own hard limit of
             // 32767 frames (~22 min at 24fps), well past what this feature is for.
-            filters.push(format!("loop=loop={}:size=32767:start=0", self.loop_count - 1));
+            filters.push(format!(
+                "loop=loop={}:size=32767:start=0",
+                self.loop_count - 1
+            ));
         }
         (input, filters)
     }

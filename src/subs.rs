@@ -166,7 +166,12 @@ fn extract(ffmpeg: &Path, src: &CueSource) -> Result<(String, Vec<Cue>), String>
     Ok(parse_ass(&out))
 }
 
-fn run_extract(ffmpeg: &Path, src: &CueSource, map: &str, sub_codec: &str) -> Result<String, String> {
+fn run_extract(
+    ffmpeg: &Path,
+    src: &CueSource,
+    map: &str,
+    sub_codec: &str,
+) -> Result<String, String> {
     let mut cmd = Command::new(ffmpeg);
     cmd.args(["-hide_banner", "-nostdin", "-loglevel", "error", "-i"])
         .arg(&src.file)
@@ -362,8 +367,10 @@ mod tests {
         let out = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(out.starts_with("[Script Info]\nTitle: test\n"));
-        assert!(out.contains(
-            "Dialogue: 0,0:00:01.00,0:00:02.50,Default,Speaker,40,0,120,,{\\i1}Hello\n"
-        ));
+        assert!(
+            out.contains(
+                "Dialogue: 0,0:00:01.00,0:00:02.50,Default,Speaker,40,0,120,,{\\i1}Hello\n"
+            )
+        );
     }
 }

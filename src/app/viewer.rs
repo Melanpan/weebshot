@@ -543,10 +543,18 @@ impl App {
                 {
                     self.pending.push(Action::ToggleLoop);
                 }
-                self.action_button(ui, Action::PlayToOut, &format!("{} {}", icon::PLAY, icon::MARK_OUT));
+                self.action_button(
+                    ui,
+                    Action::PlayToOut,
+                    &format!("{} {}", icon::PLAY, icon::MARK_OUT),
+                );
                 self.action_button(ui, Action::SetOut, &format!("Out {}", icon::MARK_OUT));
                 self.action_button(ui, Action::SetIn, &format!("{} In", icon::MARK_IN));
-                self.action_button(ui, Action::PlayFromIn, &format!("{} {}", icon::MARK_IN, icon::PLAY));
+                self.action_button(
+                    ui,
+                    Action::PlayFromIn,
+                    &format!("{} {}", icon::MARK_IN, icon::PLAY),
+                );
             });
         });
     }
