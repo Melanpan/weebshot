@@ -42,6 +42,7 @@ The transport bar under it, from left to right:
 | **Shuttle** (the slider with the knob) | Push the knob right to play faster, left to play backwards — the further, the faster (¼× up to 16×). Let go and it springs back and stops. Scroll over it to change the speed in steps. Same as [J](key:ShuttleBack) / [K](key:ShuttleStop) / [L](key:ShuttleForward). |
 | Timecode | `HH:MM:SS:FF`, with the frame number and frame rate next to it. Click it to type a position. |
 | In / Out | Mark the current frame as the clip start / end |
+| Play In→Out / Play to Out | Preview the marked range once: play from In through Out, or from wherever you are to Out ([Ctrl+Space](key:PlayFromIn) / [Shift+Space](key:PlayToOut)) |
 | Zoom − / Fit / + | Zoom the picture: [Ctrl+-](key:ViewZoomOut) / [Ctrl+=](key:ViewZoomIn), back to fit with [Ctrl+0](key:ViewZoomFit). Click the percentage for presets. **Ctrl+wheel** over the picture zooms at the pointer; drag to pan. |
 | Subtitles (CC) | Show/hide subtitles in the preview ([C](key:ToggleSubtitles)). Only the preview — screenshots and exports still burn them in if asked. |
 | Loop | Loop playback between In and Out |

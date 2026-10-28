@@ -11,7 +11,8 @@
   beat hits. It's read in the background after opening a file (and again when you switch audio
   tracks); turn it off with the *Audio* checkbox above the timeline.
 - **S1** — one block per subtitle line of the selected subtitle track. Hover a block to read it.
-  Signs and typesetting without readable text are left out.
+  Signs and typesetting without readable text are left out. Lines can be edited, deleted and
+  retimed — see *Editing subtitles* below.
   (Turn the lane off with the *Subtitles* checkbox above the timeline if you don't need it.)
 
 The **red line** is the playhead. The **yellow** band and flags (`I` / `O`) are the clip range.
@@ -38,12 +39,14 @@ so you'll often see the same picture several times in a row:
 | Drag | Scrub — the preview follows |
 | Drag the In / Out line (anywhere along it, or its `I` / `O` flag) | Move the In / Out point. The preview shows the frame under the marker while you drag; the playhead goes back where it was when you let go. |
 | Drag the yellow band in the ruler | Move the whole In→Out range |
-| Click a subtitle block | Jump to the start of that line |
+| Click a subtitle block | Jump to the start of that line, and select it (outlined) |
 | Double-click a subtitle block | Set In/Out to exactly that line |
 | **Ctrl+click** a subtitle block | Play just that line, then stop |
+| Drag a subtitle block's body | Retime the line, keeping its length |
+| Drag a subtitle block's edge | Move just that line's start or end |
 | **Ctrl + wheel** (or pinch) | Zoom around the pointer |
 | Mouse wheel, Alt + drag, or middle-drag | Scroll left/right |
-| Right-click | Set In/Out here, mark a line, zoom to In/Out, fit |
+| Right-click | Set In/Out here, mark a line, zoom to In/Out, fit — or, over a subtitle block, edit its text or delete it |
 
 While you drag a marker, the viewer shows the frame under it — framed in yellow, with a label
 saying which marker it is (**IN POINT**, **OUT POINT** or **MOVING IN → OUT**) and its timecode
@@ -55,6 +58,22 @@ was before you started dragging.
 While dragging In, Out or the range, edges **snap** to subtitle line starts/ends and chapter
 marks when they get close — hold **Shift** to place them freely. Hovering anywhere shows the time and
 frame number; over a subtitle block it also shows the full line.
+
+## Editing subtitles
+
+Right-click a subtitle block for **Edit text…** or **Delete subtitle**. Clicking a block also
+selects it (shown with an outline); [Delete](key:DeleteSubtitleLine) removes whichever line is
+selected, so you don't have to right-click for it every time. Selection is independent of the
+playhead, so it won't change out from under you if the video keeps playing.
+
+To retime a line, drag its body to move it (the length stays the same) or drag an edge to change
+just its start or end.
+
+Editing a line's text keeps its font, color and position — only that one line loses its
+per-character ASS overrides (mid-line bold/italic, etc.), since there's no way to tell where those
+should land in new text. Lines you don't touch are untouched, byte-for-byte. The preview and any
+export reflect your edits; *File → Export → Save subtitles as…* writes the current (edited) track
+out as a standalone `.ass` file.
 
 You can also zoom with the **slider at the bottom right of the status bar** (it keeps the playhead
 in view), or the keyboard: [=](key:ZoomIn) in, [-](key:ZoomOut) out, [Shift+Z](key:ZoomFit) fit the
@@ -108,4 +127,7 @@ Press Enter to go there, Esc to cancel.
 ### Looping
 
 [P](key:ToggleLoop) (or the loop button) plays the In→Out range on repeat, so you can check a cut
-before exporting.
+before exporting. For a single pass instead of repeating forever, use
+[Ctrl+Space](key:PlayFromIn) (play the whole range from In) or [Shift+Space](key:PlayToOut) (play
+from wherever you are to Out) — handy for checking exactly where a loop export (see
+[Clips](clips.md)) will seam.

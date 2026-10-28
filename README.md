@@ -2,9 +2,9 @@
 
 <img src="assets/mascot.png" alt="Weebshot mascot: a girl in a director's chair holding a clapperboard" align="right" width="230">
 
-**Frame-accurate anime screenshot & clip maker.**
-Open an episode, find the exact frame or line, and save a full-resolution screenshot or cut a
-WebM, MP4, MKV, GIF or animated WebP — with the subtitles burned in, without them, or both at once.
+A screenshot and clip tool for anime. Open an episode, find the frame or line you want, and save a
+full-resolution screenshot or cut a WebM, MP4, MKV, GIF or animated WebP, with subtitles burned in,
+left out, or both.
 
 [![Release](https://img.shields.io/github/v/release/Melanpan/weebshot?sort=semver)](https://github.com/Melanpan/weebshot/releases/latest)
 [![CI](https://github.com/Melanpan/weebshot/actions/workflows/ci.yml/badge.svg)](https://github.com/Melanpan/weebshot/actions/workflows/ci.yml)
@@ -44,43 +44,48 @@ More in [Installing & updating](docs/install.md).
 
 ## Features
 
-### Find the exact moment
-- **Frame-accurate everything** — arrow keys step one frame (Shift/Ctrl for bigger, configurable
-  steps), clicks snap to frames, and you can type a timecode (`00:01:23:12`) or frame number (`#2000`).
-- **Editor-style timeline** with a thumbnail filmstrip that shows **every single frame** when you
-  zoom in, the **audio waveform**, every **subtitle line** as a block, and chapter markers.
-- **Premiere-style shuttle** (and J/K/L keys) for fast forward/backward scanning.
-- **Jump between subtitle lines** with ↑/↓ — the quickest way to find a line of dialogue.
+### Finding a frame
+- Arrow keys step one frame at a time (Shift/Ctrl for bigger, configurable steps), clicks snap to
+  frames, and you can type a timecode (`00:01:23:12`) or frame number (`#2000`).
+- Timeline with a thumbnail filmstrip (every frame, once you zoom in), an audio waveform, subtitle
+  lines as blocks, and chapter markers.
+- A shuttle control, plus J/K/L, for scanning forward and backward at variable speed.
+- ↑/↓ jump between subtitle lines.
 
 ![Timeline zoomed in to single frames](docs/images/timeline-frames.jpg)
 
-### Subtitles done right
-- Mark a clip as **exactly one subtitle line** with one key (or a double-click on the timeline).
-- Styled **ASS subtitles keep their fonts** — the fonts embedded in the MKV are used, the same
-  renderer as the preview. Blu-ray PGS subtitles work too.
-- Every export can be **with subs, without, or both** in one go (`…_subbed` / `…_raw`).
+### Subtitles
+- Mark a clip to exactly one subtitle line with a single key press, or a double-click on the
+  timeline.
+- Subtitle lines can be edited, deleted and retimed directly on the timeline (right-click a line,
+  or drag it to retime). Edits are reflected in the preview and in exports.
+- Styled ASS subtitles keep their fonts — whatever's embedded in the MKV is used, with the same
+  renderer as the preview. PGS (Blu-ray) subtitles work too.
+- Exports can include subtitles, leave them out, or do both in one go (`…_subbed` / `…_raw`).
 
 ### Screenshots
-- Saved by the player itself: **the exact frame at full resolution** (not the window size), as PNG,
-  JPG or WebP. `S` for the subtitle setting of your choice, `Ctrl+S` for a clean frame.
+- Taken by the player itself, at full source resolution (not the window size), as PNG, JPG or
+  WebP. `S` uses your current subtitle setting, `Ctrl+S` gives a clean frame.
 
 ### Clips
-- **WebM** (VP9/Opus), **MP4** (H.264/AAC), **MKV**, **GIF**, **animated WebP**.
-- **Fit into a file size** — pick 4 / 8 / 10 / 25 / 50 MB (imageboards, Discord…) and Weebshot
-  does a 2-pass encode that lands just under it.
-- **GPU encoding** with NVIDIA NVENC, Intel Quick Sync or AMD AMF — detected by actually testing them.
-- 10-bit sources are converted so clips play everywhere; cuts are frame-accurate.
+- WebM (VP9/Opus), MP4 (H.264/AAC), MKV, GIF, animated WebP.
+- Can target a file size (4/8/10/25/50 MB, e.g. for imageboards or Discord) with a 2-pass encode
+  that lands just under it.
+- Can also repeat a clip's content a set number of times, for making loop videos.
+- GPU encoding via NVENC, Quick Sync or AMF, where available — found by actually testing each one
+  rather than just checking for drivers.
+- 10-bit sources are converted so clips play back everywhere; cuts are frame-accurate.
 
-### GIFs that don't explode
-- Optimal palette per clip, **duplicate-frame dropping** (anime is drawn on 2s and 3s),
-  changed-area-only encoding, adjustable colors and dithering, optional **gifsicle lossy**
-  compression — with Small/Balanced/High presets.
+### GIFs
+- Per-clip optimal palette, duplicate-frame dropping (anime is often drawn on 2s/3s),
+  changed-area-only encoding, adjustable colors and dithering, and optional gifsicle lossy
+  compression, with Small/Balanced/High presets.
 
-### Nice to work with
-- Background **export queue** with progress, retry, and a log of every ffmpeg command.
-- **Rebindable shortcuts**, themes (including **Gruvbox**, Nord, Catppuccin, Dracula), UI scaling.
-- Built-in **documentation** (F1) that always shows *your* key bindings.
-- Little sounds when screenshots and exports are done.
+### Other things
+- Export queue runs in the background, with progress, retry, and a log of every ffmpeg command run.
+- Rebindable shortcuts, a few themes (Gruvbox, Nord, Catppuccin, Dracula), UI scaling.
+- Built-in documentation (F1) that reflects your current key bindings.
+- A short sound when a screenshot or export finishes.
 
 <details>
 <summary>More screenshots</summary>

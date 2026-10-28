@@ -41,10 +41,19 @@ size at the bottom of the cropped picture (image subtitles are cropped along wit
 - **Frame rate** — *Original* or a maximum (60 … 12 fps). Never adds frames above the source rate.
 - **Include audio** — uses the audio track selected under **Tracks**, downmixed to stereo.
 
+## Loop
+
+Set **Loop** to repeat the clip's content 1–20 times in the output file — for turning a short cut
+into a loop video. Audio loops in sync with the video, and it works for every format. Before
+exporting, check the seam with [Ctrl+Space](key:PlayFromIn) or [Shift+Space](key:PlayToOut) — see
+[Timeline & seeking](timeline.md) (*Looping*).
+
 ## Subtitles
 
 - *No subs*, *Burn in*, or *Both* (two files: `…_subbed` and `…_raw`, queued together).
-- Styled ASS subtitles keep their fonts — the fonts attached to the MKV are used.
+- Styled ASS subtitles keep their fonts — the fonts attached to the MKV are used. If you've edited,
+  deleted or retimed any lines on the timeline, the export burns in those edits (see
+  [Timeline & seeking](timeline.md)).
 - Image subtitles (PGS from Blu-rays) are supported when they're inside the video file.
 - External subtitle files that mpv loaded automatically (e.g. `episode.ass` next to `episode.mkv`)
   work too.

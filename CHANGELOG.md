@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Edit subtitles on the timeline** — right-click a line to edit its text or delete it, or drag
+  its body/edges to retime it. Click a line to select it (shown outlined); **Delete** then removes
+  the selected line. Edited lines keep their original font, color and position — only the touched
+  line's text loses its per-character ASS overrides (bold/italic mid-line, etc). The preview and
+  exports burn in the edits.
+- **Save subtitles as…** exports the current (possibly edited) subtitle track to a standalone
+  `.ass` file.
+- **Loop** export option: repeat a clip's content 1–20 times in the output file, for making loop
+  videos.
+- **Play In→Out** (**Ctrl+Space**) and **Play to Out** (**Shift+Space**) preview the marked range
+  without turning on Loop — the first plays the whole range from the top, the second plays from
+  wherever you are to the Out point.
+
+### Fixed
+- Japanese and other CJK subtitle text now renders in the timeline and the inline editor (a Noto
+  Sans JP fallback font is bundled).
+- Keyboard shortcuts no longer fire while typing in a text field (e.g. the subtitle editor).
+
 ## 0.2.0 — 2026-10-26
 
 ### New
