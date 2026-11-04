@@ -40,6 +40,8 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mkv", "mp4", "webm", "avi", "mov", "m2ts", "ts", "wmv", "flv", "m4v",
 ];
 
+pub const SUBTITLE_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub"];
+
 /// Tabs of the right-hand panel.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SideTab {
@@ -320,6 +322,18 @@ impl App {
         }
         if let Some(path) = dialog.pick_file() {
             self.open(&path);
+        }
+    }
+
+    fn load_subtitle_dialog(&mut self) {
+        let mut dialog = rfd::FileDialog::new().add_filter("Subtitle", SUBTITLE_EXTENSIONS);
+        if let Some(dir) = self.player.file.as_ref().and_then(|f| f.parent()) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.pick_file()
+            && let Err(e) = self.player.add_sub(&path)
+        {
+            self.error(format!("{e:#}"));
         }
     }
 
@@ -999,6 +1013,7 @@ impl App {
         match action {
             Action::Open => self.open_dialog(),
             Action::Close => self.close(),
+            Action::LoadSubtitle => self.load_subtitle_dialog(),
             Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::Options => self.ui.show_options = !self.ui.show_options,
             Action::Docs => self.ui.show_docs = !self.ui.show_docs,

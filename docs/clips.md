@@ -55,8 +55,8 @@ exporting, check the seam with [Ctrl+Space](key:PlayFromIn) or [Shift+Space](key
   deleted or retimed any lines on the timeline, the export burns in those edits (see
   [Timeline & seeking](timeline.md)).
 - Image subtitles (PGS from Blu-rays) are supported when they're inside the video file.
-- External subtitle files that mpv loaded automatically (e.g. `episode.ass` next to `episode.mkv`)
-  work too.
+- External subtitle files work too, whether mpv loaded them automatically (e.g. `episode.ass` next
+  to `episode.mkv`) or you picked one yourself with *File → Load subtitle file…*.
 
 ## Encoder speed
 

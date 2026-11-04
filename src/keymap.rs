@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum Action {
     Open,
     Close,
+    LoadSubtitle,
     Quit,
     Options,
     Docs,
@@ -51,9 +52,10 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 41] = [
         Self::Open,
         Self::Close,
+        Self::LoadSubtitle,
         Self::Quit,
         Self::Options,
         Self::Docs,
@@ -98,6 +100,7 @@ impl Action {
         match self {
             Self::Open => "Open video",
             Self::Close => "Close video",
+            Self::LoadSubtitle => "Load subtitle file…",
             Self::Quit => "Quit",
             Self::Options => "Options",
             Self::Docs => "Documentation",
@@ -142,7 +145,9 @@ impl Action {
     pub fn group(self) -> &'static str {
         use Action::*;
         match self {
-            Open | Close | Quit | Options | Docs | ToggleDock | Fullscreen => "General",
+            Open | Close | LoadSubtitle | Quit | Options | Docs | ToggleDock | Fullscreen => {
+                "General"
+            }
             ViewZoomIn | ViewZoomOut | ViewZoomFit => "Preview",
             PlayPause | FrameBack | FrameForward | SeekBackSmall | SeekForwardSmall
             | SeekBackBig | SeekForwardBig | PrevSubtitle | NextSubtitle | ShuttleBack
@@ -256,6 +261,10 @@ pub fn default_binding(action: Action) -> Option<Binding> {
     Some(match action {
         Open => Binding::ctrl(Key::O),
         Close => Binding::ctrl(Key::W),
+        LoadSubtitle => Binding {
+            shift: true,
+            ..Binding::ctrl(Key::O)
+        },
         Quit => Binding::ctrl(Key::Q),
         Options => Binding::ctrl(Key::Comma),
         Docs => Binding::key(Key::F1),

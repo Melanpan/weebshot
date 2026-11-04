@@ -101,10 +101,24 @@ impl App {
                 .current(kind)
                 .map_or("None".into(), |t| t.label());
             ui.weak(label);
-            egui::ComboBox::from_id_salt(label)
-                .width(ui.available_width())
-                .selected_text(current)
-                .show_ui(ui, |ui| self.track_list(ui, kind));
+            ui.horizontal(|ui| {
+                // The button is allocated first so the combo box can claim exactly the
+                // width left over — guessing a fixed offset for the button's width here
+                // previously made this row a few pixels too wide every frame, which crept
+                // the whole resizable side panel wider over time.
+                if kind == TrackKind::Sub
+                    && ui
+                        .button("Load…")
+                        .on_hover_text("Load a subtitle file from disk")
+                        .clicked()
+                {
+                    self.load_subtitle_dialog();
+                }
+                egui::ComboBox::from_id_salt(label)
+                    .width(ui.available_width())
+                    .selected_text(current)
+                    .show_ui(ui, |ui| self.track_list(ui, kind));
+            });
         }
     }
 

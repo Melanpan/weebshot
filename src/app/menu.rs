@@ -46,6 +46,7 @@ impl App {
                         self.open(&p);
                     }
                 });
+                self.menu_item(ui, Action::LoadSubtitle, "Load subtitle file…", loaded);
                 self.menu_item(ui, Action::Close, "Close", loaded);
                 ui.separator();
                 self.menu_item(

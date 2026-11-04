@@ -233,6 +233,17 @@ impl Player {
         Ok(())
     }
 
+    /// Load `path` as an extra subtitle track and select it — for sidecar files the
+    /// user points at explicitly, since `sub-auto` only catches same-named ones.
+    pub fn add_sub(&mut self, path: &Path) -> Result<()> {
+        let s = path.to_str().context("path is not valid UTF-8")?;
+        self.mpv
+            .command("sub-add", &[s, "select"])
+            .map_err(|e| anyhow!("mpv could not load subtitle: {e}"))?;
+        log::info("player", format!("loaded external subtitle {}", path.display()));
+        Ok(())
+    }
+
     pub fn close(&mut self) {
         self.command_async(&["stop"]);
         self.file = None;

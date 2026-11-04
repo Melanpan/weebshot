@@ -8,6 +8,7 @@ Default bindings. Every one can be changed in *Options → Shortcuts*; the help 
 | --- | --- |
 | Open video | `Ctrl+O` |
 | Close video | `Ctrl+W` |
+| Load subtitle file… | `Ctrl+Shift+O` |
 | Quit | `Ctrl+Q` |
 | Options | `Ctrl+,` |
 | Documentation | `F1` |
