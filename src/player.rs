@@ -240,7 +240,10 @@ impl Player {
         self.mpv
             .command("sub-add", &[s, "select"])
             .map_err(|e| anyhow!("mpv could not load subtitle: {e}"))?;
-        log::info("player", format!("loaded external subtitle {}", path.display()));
+        log::info(
+            "player",
+            format!("loaded external subtitle {}", path.display()),
+        );
         Ok(())
     }
 
