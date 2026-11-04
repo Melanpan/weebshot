@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-11-04
+
+### New
+- **Load subtitle file…** (*File* menu, **Ctrl+Shift+O**, or the *Load…* button next to the
+  Subtitles track in the inspector) lets you pick any subtitle file and have it selected as the
+  active track — for files mpv's automatic same-named matching doesn't catch.
+
 ## 0.3.0 — 2026-10-28
 
 ### New
