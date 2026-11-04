@@ -22,6 +22,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Fetch libmpv
         run: ./scripts/fetch-libmpv.ps1
+      - run: cargo test
       - name: Build and package (with ffmpeg + gifsicle)
         run: ./scripts/package.ps1
       - uses: actions/upload-artifact@v7
@@ -42,6 +43,7 @@ jobs:
             libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev file
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: cargo test
       - name: Build AppImage
         run: bash scripts/package-linux.sh
       - uses: actions/upload-artifact@v7
@@ -57,6 +59,7 @@ jobs:
         run: brew install mpv gifsicle dylibbundler
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: cargo test
       - name: Build app
         run: bash scripts/package-macos.sh
       - uses: actions/upload-artifact@v7
