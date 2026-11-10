@@ -78,6 +78,8 @@ Inspector and the Queue.
 ![The Logs tab](images/logs.jpg)
 
 What Weebshot, mpv and ffmpeg reported, including the exact ffmpeg command lines.
+Release builds open at **info+**. Select **all levels** to see debug details such as
+individual Auto Stitch alignment attempts.
 Filter by level or text; *Copy* puts the whole log on the clipboard (handy for bug reports).
 A red warning counter on the tab and in the status bar means an error was logged since you last looked.
 

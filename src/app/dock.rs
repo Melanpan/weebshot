@@ -187,7 +187,10 @@ impl App {
         let view = &mut self.ui.log_view;
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("log_level")
-                .selected_text(view.min_level.map_or("all levels", |l| l.label()))
+                .selected_text(view.min_level.map_or_else(
+                    || "all levels".to_owned(),
+                    |level| format!("{}+", level.label()),
+                ))
                 .width(90.0)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut view.min_level, None, "all levels");

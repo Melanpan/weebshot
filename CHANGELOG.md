@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Release builds show info, warnings and errors by default in the Logs tab.
+  Debug messages are available through the level filter.
+
 - Added source-frame thumbnails with include/exclude controls and background
   recomposition, reusing alignment and preserving the previous preview on failure.
 - Improved pose-change rejection using line-art agreement and replaced fixed

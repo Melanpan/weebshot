@@ -265,6 +265,11 @@ impl App {
                 hw_probe: None,
                 hw_results: Vec::new(),
                 log_view: LogView {
+                    min_level: if cfg!(debug_assertions) {
+                        None
+                    } else {
+                        Some(log::Level::Info)
+                    },
                     follow: true,
                     ..Default::default()
                 },
