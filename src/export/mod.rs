@@ -379,6 +379,10 @@ pub struct Tools {
 }
 
 pub enum JobEvent {
+    Stitched {
+        id: u64,
+        result: Result<crate::stitch::Output, String>,
+    },
     Progress {
         id: u64,
         /// `None` while a step can't report progress (e.g. building a GIF palette).
@@ -392,9 +396,18 @@ pub enum JobEvent {
     },
 }
 
+enum Work {
+    Clip(ClipJob),
+    Stitch(crate::stitch::Job),
+    Recompose {
+        recipe: Arc<crate::stitch::Recipe>,
+        included: Vec<bool>,
+    },
+}
+
 struct Submission {
     id: u64,
-    job: ClipJob,
+    job: Work,
     cancel: Arc<AtomicBool>,
 }
 
@@ -419,15 +432,52 @@ impl Runner {
                     });
                     ctx.request_repaint();
                 };
+                let stitch_result = match &sub.job {
+                    Work::Stitch(job) => Some(crate::stitch::run(
+                        &tools.ffmpeg,
+                        sub.id,
+                        job,
+                        &sub.cancel,
+                        |f, s| report(f, Some(f), s),
+                    )),
+                    Work::Recompose { recipe, included } => Some(crate::stitch::recompose(
+                        &tools.ffmpeg,
+                        sub.id,
+                        recipe.clone(),
+                        included.clone(),
+                        &sub.cancel,
+                        |f, s| report(f, Some(f), s),
+                    )),
+                    Work::Clip(_) => None,
+                };
+                if let Some(result) = stitch_result {
+                    let result = result.map_err(|e| format!("{e:#}"));
+                    match &result {
+                        Ok(out) => log::info(
+                            "stitch",
+                            format!(
+                                "{} × {}, {} frames in {:.1}s",
+                                out.dimensions.0, out.dimensions.1, out.frames, out.elapsed
+                            ),
+                        ),
+                        Err(e) if e == "cancelled" => log::info("stitch", "cancelled"),
+                        Err(e) => log::error("stitch", e),
+                    }
+                    let _ = ev_tx.send(JobEvent::Stitched { id: sub.id, result });
+                    ctx.request_repaint();
+                    continue;
+                }
+                let Work::Clip(job) = &sub.job else {
+                    unreachable!()
+                };
                 let result = if sub.cancel.load(Ordering::Relaxed) {
                     Err("cancelled".to_string())
                 } else {
-                    run_job(&tools, sub.id, &sub.job, &sub.cancel, report)
-                        .map_err(|e| format!("{e:#}"))
+                    run_job(&tools, sub.id, job, &sub.cancel, report).map_err(|e| format!("{e:#}"))
                 };
                 match &result {
-                    Ok(()) => log::info("export", format!("finished {}", sub.job.output.display())),
-                    Err(e) => log::error("export", format!("{}: {e}", sub.job.output.display())),
+                    Ok(()) => log::info("export", format!("finished {}", job.output.display())),
+                    Err(e) => log::error("export", format!("{}: {e}", job.output.display())),
                 }
                 let _ = ev_tx.send(JobEvent::Finished { id: sub.id, result });
                 ctx.request_repaint();
@@ -436,8 +486,34 @@ impl Runner {
         Self { tx, events }
     }
 
+    pub fn submit_recompose(
+        &self,
+        id: u64,
+        recipe: Arc<crate::stitch::Recipe>,
+        included: Vec<bool>,
+        cancel: Arc<AtomicBool>,
+    ) {
+        let _ = self.tx.send(Submission {
+            id,
+            job: Work::Recompose { recipe, included },
+            cancel,
+        });
+    }
+
+    pub fn submit_stitch(&self, id: u64, job: crate::stitch::Job, cancel: Arc<AtomicBool>) {
+        let _ = self.tx.send(Submission {
+            id,
+            job: Work::Stitch(job),
+            cancel,
+        });
+    }
+
     pub fn submit(&self, id: u64, job: ClipJob, cancel: Arc<AtomicBool>) {
-        let _ = self.tx.send(Submission { id, job, cancel });
+        let _ = self.tx.send(Submission {
+            id,
+            job: Work::Clip(job),
+            cancel,
+        });
     }
 }
 
@@ -618,6 +694,53 @@ pub fn tool_version(tool: &Path, flag: &str) -> Result<String> {
         .with_context(|| format!("{} not found", tool.display()))?;
     let text = String::from_utf8_lossy(&out.stdout);
     Ok(text.lines().next().unwrap_or("").to_string())
+}
+
+/// Publish an already encoded image through a sibling scratch file. Keep the old
+/// destination intact if reading or writing fails, and never follow its symlink
+/// while writing. `source_video` also prevents replacing the open input itself.
+pub fn save_image_copy(
+    encoded: &Path,
+    destination: &Path,
+    source_video: &Path,
+    id: u64,
+) -> Result<(), String> {
+    let same = destination == source_video
+        || destination
+            .canonicalize()
+            .ok()
+            .zip(source_video.canonicalize().ok())
+            .is_some_and(|(a, b)| a == b);
+    if same {
+        return Err("Choose a PNG destination different from the source video".into());
+    }
+    let scratch = destination.with_extension(format!("weebshot-{}-{id}.tmp", std::process::id()));
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    // Create before installing the guard: a pre-existing scratch file belongs to
+    // another operation and must not be removed after a create_new failure.
+    let result = (|| -> Result<()> {
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&scratch)?;
+        let _cleanup = Scratch(scratch.clone());
+        let mut input = std::fs::File::open(encoded)?;
+        std::io::copy(&mut input, &mut output)?;
+        output.sync_all()?;
+        drop(output);
+        #[cfg(windows)]
+        if destination.exists() {
+            std::fs::remove_file(destination)?;
+        }
+        std::fs::rename(&scratch, destination)?;
+        Ok(())
+    })();
+    result.map_err(|e| format!("Could not save image: {e:#}"))
 }
 
 #[cfg(test)]

@@ -181,6 +181,7 @@ impl TimelineState {
 }
 
 pub enum Event {
+    StitchSelection,
     Seek {
         t: f64,
         exact: bool,
@@ -1106,6 +1107,15 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
                 events.push(Event::DeleteCue(idx));
             }
         }
+        if ui
+            .add_enabled(
+                d.in_point.is_some() && d.out_point.is_some(),
+                egui::Button::new("Stitch Selection…"),
+            )
+            .clicked()
+        {
+            events.push(Event::StitchSelection);
+        }
         if ui.button("Clear In/Out").clicked() {
             events.push(Event::Clear);
         }
@@ -1199,6 +1209,7 @@ impl App {
                 Event::SetOut(t) => self.set_out_at(t),
                 Event::SetRange(a, b) => self.set_range(a, b),
                 Event::PlayRange(a, b) => self.play_range(a, b),
+                Event::StitchSelection => self.pending.push(Action::StitchSelection),
                 Event::Clear => self.pending.push(Action::ClearInOut),
                 Event::DeleteCue(idx) => self.delete_cue(idx),
                 Event::EditCueText(idx, text) => self.set_cue_text(idx, text),

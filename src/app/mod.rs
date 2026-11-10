@@ -6,6 +6,7 @@ mod inspector;
 mod menu;
 mod options;
 pub mod shots;
+mod stitching;
 mod timeline;
 mod updates;
 mod viewer;
@@ -150,6 +151,7 @@ pub struct App {
     ui: UiState,
     sounds: Sounds,
     /// A cropped screenshot being rendered by ffmpeg.
+    stitch: stitching::State,
     shot_rx: Option<crossbeam_channel::Receiver<Result<Vec<String>, String>>>,
     /// Title last sent to the window, so it's only updated on change.
     window_title: String,
@@ -269,6 +271,7 @@ impl App {
                 timecode_edit: None,
             },
             sounds: Sounds::new(),
+            stitch: Default::default(),
             shot_rx: None,
             window_title: String::new(),
             updater: crate::update::Updater::new(),
@@ -823,13 +826,18 @@ impl App {
         let mut failed = false;
         let mut finished = false;
         while let Ok(ev) = self.runner.events.try_recv() {
+            let Some(ev) = self.stitch_event(ev) else {
+                continue;
+            };
             let id = match &ev {
+                JobEvent::Stitched { .. } => continue,
                 JobEvent::Progress { id, .. } | JobEvent::Finished { id, .. } => *id,
             };
             let Some(job) = self.jobs.iter_mut().find(|j| j.id == id) else {
                 continue;
             };
             match ev {
+                JobEvent::Stitched { .. } => unreachable!(),
                 JobEvent::Progress {
                     fraction,
                     overall,
@@ -872,8 +880,8 @@ impl App {
     }
 
     fn redetect_tools(&mut self, ctx: &egui::Context) {
-        if self.jobs_active() > 0 {
-            return self.error("Wait for running exports to finish first");
+        if self.jobs_active() > 0 || self.stitch.progress().is_some() {
+            return self.error("Wait for running exports and stitches to finish first");
         }
         let (tools, status) = detect_tools(&self.settings);
         self.runner = Runner::new(tools.clone(), ctx.clone());
@@ -1071,6 +1079,8 @@ impl App {
             Action::PlayToOut => self.play_to_out(),
             Action::ToggleLoop => self.set_looping(!self.looping),
             Action::Screenshot => self.take_screenshot(self.settings.shot_subs),
+            Action::AutoStitch => self.start_stitch(ctx, false),
+            Action::StitchSelection => self.start_stitch(ctx, true),
             Action::ScreenshotClean => self.take_screenshot(SubMode::Off),
             Action::Fullscreen => {
                 let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
@@ -1357,6 +1367,9 @@ impl App {
     /// Background work for the open file: (label, progress if measurable).
     fn background_tasks(&self) -> Vec<(&'static str, Option<f32>)> {
         let mut tasks = Vec::new();
+        if let Some(progress) = self.stitch.progress() {
+            tasks.push(("Auto Stitch", Some(progress)));
+        }
         if self.thumbs.as_ref().is_some_and(|t| t.busy()) {
             tasks.push(("Generating thumbnails", None));
         }
@@ -1488,6 +1501,7 @@ impl eframe::App for App {
         self.docs_window(&ctx);
         self.about_window(&ctx);
         self.update_window(&ctx);
+        self.stitch_window(&ctx);
 
         for action in std::mem::take(&mut self.pending) {
             self.run_action(&ctx, action);
@@ -1515,6 +1529,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        self.finish_stitch();
         self.player.destroy_gl(gl);
     }
 }

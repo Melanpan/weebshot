@@ -59,6 +59,15 @@ While dragging In, Out or the range, edges **snap** to subtitle line starts/ends
 marks when they get close — hold **Shift** to place them freely. Hovering anywhere shows the time and
 frame number; over a subtitle block it also shows the full line.
 
+## Stitching an In/Out range
+
+Mark the beginning and end of a camera pan with [I](key:SetIn) and [O](key:SetOut),
+then right-click the timeline and choose **Stitch Selection**, or press
+[Alt+Shift+S](key:StitchSelection). Both stitch actions use your marked range while
+both marks are present. Clear them with [Alt+X](key:ClearInOut) before using
+**Auto Stitch** to discover a pan around the playhead. See [Auto Stitch](stitching.md)
+for preview controls, saving, and handling animated frames.
+
 ## Editing subtitles
 
 Right-click a subtitle block for **Edit text…** or **Delete subtitle**. Clicking a block also

@@ -8,6 +8,7 @@ mod log;
 mod player;
 mod settings;
 mod sounds;
+mod stitch;
 mod subs;
 mod theme;
 mod thumbs;

@@ -39,6 +39,8 @@ pub enum Action {
     ToggleLoop,
     Screenshot,
     ScreenshotClean,
+    AutoStitch,
+    StitchSelection,
     ExportClip,
     ExportSubtitles,
     ToggleDock,
@@ -52,7 +54,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 43] = [
         Self::Open,
         Self::Close,
         Self::LoadSubtitle,
@@ -84,6 +86,8 @@ impl Action {
         Self::ToggleLoop,
         Self::Screenshot,
         Self::ScreenshotClean,
+        Self::AutoStitch,
+        Self::StitchSelection,
         Self::ExportClip,
         Self::ExportSubtitles,
         Self::ToggleDock,
@@ -128,6 +132,8 @@ impl Action {
             Self::PlayToOut => "Play to Out",
             Self::ToggleLoop => "Loop In→Out",
             Self::Screenshot => "Screenshot",
+            Self::AutoStitch => "Auto Stitch",
+            Self::StitchSelection => "Stitch Selection",
             Self::ScreenshotClean => "Screenshot without subtitles",
             Self::ExportClip => "Export clip",
             Self::ExportSubtitles => "Save subtitles as…",
@@ -154,7 +160,8 @@ impl Action {
             | ShuttleStop | ShuttleForward | ToggleSubtitles => "Playback",
             SetIn | SetOut | MarkSubtitleLine | DeleteSubtitleLine | ClearInOut | GoToIn
             | GoToOut | PlayFromIn | PlayToOut | ToggleLoop => "Marking",
-            Screenshot | ScreenshotClean | ExportClip | ExportSubtitles => "Export",
+            AutoStitch | StitchSelection | Screenshot | ScreenshotClean | ExportClip
+            | ExportSubtitles => "Export",
             ZoomIn | ZoomOut | ZoomFit => "Timeline",
         }
     }
@@ -293,6 +300,11 @@ pub fn default_binding(action: Action) -> Option<Binding> {
         ToggleLoop => Binding::key(Key::P),
         Screenshot => Binding::key(Key::S),
         ScreenshotClean => Binding::ctrl(Key::S),
+        AutoStitch => Binding::shift(Key::S),
+        StitchSelection => Binding {
+            shift: true,
+            ..Binding::alt(Key::S)
+        },
         ExportClip => Binding::key(Key::E),
         ExportSubtitles => Binding::alt(Key::S),
         ToggleDock => Binding::ctrl(Key::J),

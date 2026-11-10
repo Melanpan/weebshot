@@ -80,6 +80,8 @@ pub struct Settings {
     /// When the preview is zoomed in, save only the visible part.
     pub shot_crop: bool,
 
+    pub stitch: crate::stitch::Options,
+
     // Clip
     pub clip_format: ClipFormat,
     pub quality: Quality,
@@ -150,6 +152,7 @@ impl Default for Settings {
             shot_format: ShotFormat::Png,
             shot_subs: SubMode::Burned,
             shot_crop: false,
+            stitch: crate::stitch::Options::default(),
             clip_format: ClipFormat::Webm,
             quality: Quality::Balanced,
             use_target_size: false,

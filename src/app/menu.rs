@@ -102,6 +102,13 @@ impl App {
 
             ui.menu_button("Export", |ui| {
                 self.menu_item(ui, Action::Screenshot, "Screenshot", loaded);
+                self.menu_item(ui, Action::AutoStitch, "Auto Stitch…", loaded);
+                self.menu_item(
+                    ui,
+                    Action::StitchSelection,
+                    "Stitch Selection…",
+                    loaded && self.in_point.is_some() && self.out_point.is_some(),
+                );
                 self.menu_item(ui, Action::ExportClip, "Export clip", loaded);
                 let has_cues = self.cues.as_ref().is_some_and(|c| !c.cues.is_empty());
                 self.menu_item(ui, Action::ExportSubtitles, "Save subtitles as…", has_cues);

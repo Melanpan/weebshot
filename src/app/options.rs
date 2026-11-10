@@ -311,6 +311,21 @@ impl App {
         }
 
         ui.add_space(8.0);
+        ui.heading("Auto Stitch");
+        ui.weak("Automatic discovery; In/Out marks take precedence. High quality, clean source frames, PNG output.");
+        ui.add(
+            egui::Slider::new(&mut self.settings.stitch.sampling_fps, 2.0..=16.0)
+                .text("Analysis frames/second (adaptive)"),
+        );
+        ui.add(
+            egui::Slider::new(&mut self.settings.stitch.search_seconds, 1.0..=30.0)
+                .text("Search seconds in each direction"),
+        );
+        ui.checkbox(
+            &mut self.settings.stitch.allow_pauses,
+            "Allow short pan pauses",
+        );
+        ui.add_space(8.0);
         ui.heading("Encoders");
         let e = &mut self.settings.encoder;
         egui::Grid::new("encoders").num_columns(2).show(ui, |ui| {

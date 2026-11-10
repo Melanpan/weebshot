@@ -58,6 +58,19 @@ or the shuttle. Hardware decoding (*Options → Playback*) usually helps.
 
 Turn off *Hardware decoding* in *Options → Playback*.
 
+## Auto Stitch fails or gives a shorter result
+
+Use one continuous camera pan with stable artwork. Cuts, large pose changes, low
+detail, zooms, rotation, and parallax can prevent reliable alignment. Try marking
+a shorter In/Out range and choosing **Stitch Selection**. If only part of the pan
+can be aligned, the preview warns about omitted frames and shows the actual output
+range. Inspect the result before saving.
+
+If Auto Stitch and Stitch Selection seem to do the same thing, both In/Out marks
+are probably set: these always take precedence. Clear them with
+[Alt+X](key:ClearInOut) to let Auto Stitch discover the boundaries. See
+[Auto Stitch](stitching.md) for the full workflow, settings, and performance notes.
+
 ## Resetting everything
 
 Settings are stored in one file. Delete it while Weebshot is closed to start fresh:

@@ -32,3 +32,6 @@ These screenshots are rendered by ffmpeg instead of the player, so they take a m
 
 Default: `{name}_{time}`, e.g. `[Group] Show - 01_12m03s417.png`. Change it in *Options → General*.
 If a file with that name already exists, ` (2)`, ` (3)`, … is added — nothing is overwritten.
+
+For artwork revealed by a camera pan, use [Auto Stitch](stitching.md) to combine
+overlapping frames into a larger PNG.

@@ -40,6 +40,7 @@ const PAGES: &[(&str, &str)] = &[
     ("The interface", include_str!("../../docs/interface.md")),
     ("Timeline & seeking", include_str!("../../docs/timeline.md")),
     ("Screenshots", include_str!("../../docs/screenshots.md")),
+    ("Auto Stitch", include_str!("../../docs/stitching.md")),
     ("Clips", include_str!("../../docs/clips.md")),
     ("GIFs", include_str!("../../docs/gifs.md")),
     (
@@ -279,6 +280,7 @@ mod tests {
             "interface.md",
             "timeline.md",
             "screenshots.md",
+            "stitching.md",
             "clips.md",
             "gifs.md",
             "shortcuts.md",

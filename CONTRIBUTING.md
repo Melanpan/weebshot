@@ -49,10 +49,16 @@ Source layout:
   options, docs/about windows, custom widgets, and the docs screenshot script (`shots.rs`).
 - `src/export/` — ffmpeg/gifsicle command building, target-size maths, GPU encoder probing, and the
   background job runner.
+- `src/stitch/` — translation estimation, pan discovery, bounded FFmpeg decoding, native
+  alignment/composition and PNG metadata; no GUI dependencies. `src/app/stitching.rs` owns
+  the preview and queues work on the existing export runner.
 - `src/player.rs` — libmpv playback and OpenGL rendering into the egui window.
 - `src/thumbs.rs`, `src/waveform.rs`, `src/subs.rs` — background decoding of thumbnails, the
   audio waveform and subtitle timings for the timeline.
 - `src/keymap.rs`, `src/theme.rs`, `src/fonts.rs`, `src/sounds.rs`, `src/settings.rs`, `src/log.rs`.
+
+See [Frame stitching](docs/technical/frame-stitching.md) for the Auto Stitch pipeline and
+its regression fixtures.
 
 ## Regenerating the documentation screenshots
 
@@ -83,8 +89,12 @@ End-to-end encodes through a real ffmpeg:
 
 ```sh
 # sample: video with audio at stream 2 and an ASS track as the first subtitle stream
-WEEBSHOT_SAMPLE="path/to/sample.mkv" cargo test -- --ignored --nocapture
+WEEBSHOT_SAMPLE="path/to/sample.mkv" cargo test export::tests:: -- --ignored --nocapture
 ```
+
+Run the stitching tests with `cargo test stitch -- --nocapture`. The
+[technical guide](docs/technical/frame-stitching.md#tests) lists the generated FFmpeg
+fixtures and optional regressions that use supplied video.
 
 ## Assets
 

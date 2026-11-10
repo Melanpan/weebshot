@@ -67,6 +67,15 @@ More in [Installing & updating](docs/install.md).
 - Taken by the player itself, at full source resolution (not the window size), as PNG, JPG or
   WebP. `S` uses your current subtitle setting, `Ctrl+S` gives a clean frame.
 
+### Auto Stitch
+
+Reconstruct illustrations from horizontal, vertical, or small diagonal camera pans.
+Position the playhead inside a pan and choose **Export → Auto Stitch** (`Shift+S`),
+or mark In/Out and choose **Stitch Selection** (`Alt+Shift+S`). Preview, zoom, pan,
+and save the native-resolution result as PNG. See [Auto Stitch](docs/stitching.md)
+for settings, resource limits, and supported scenes. In/Out marks override automatic
+discovery; clear them to search around the playhead.
+
 ### Clips
 - WebM (VP9/Opus), MP4 (H.264/AAC), MKV, GIF, animated WebP.
 - Can target a file size (4/8/10/25/50 MB, e.g. for imageboards or Discord) with a 2-pass encode
@@ -109,11 +118,14 @@ The same pages are built into the app (*Help → Documentation*, or F1):
 [The interface](docs/interface.md) ·
 [Timeline & seeking](docs/timeline.md) ·
 [Screenshots](docs/screenshots.md) ·
+[Auto Stitch](docs/stitching.md) ·
 [Clips](docs/clips.md) ·
 [GIFs](docs/gifs.md) ·
 [Keyboard shortcuts](docs/shortcuts.md) ·
 [Options & themes](docs/options.md) ·
 [Troubleshooting](docs/troubleshooting.md)
+
+For implementation details, see the [technical documentation](docs/technical/README.md).
 
 ## Building from source
 

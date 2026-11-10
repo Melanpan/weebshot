@@ -52,6 +52,8 @@ Default bindings. Every one can be changed in *Options → Shortcuts*; the help 
 | --- | --- |
 | Screenshot | `S` |
 | Screenshot without subtitles | `Ctrl+S` |
+| Auto Stitch | `Shift+S` |
+| Stitch Selection | `Alt+Shift+S` |
 | Export clip | `E` |
 | Save subtitles as… | `Alt+S` |
 

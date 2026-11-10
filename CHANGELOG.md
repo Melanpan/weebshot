@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+- Added source-frame thumbnails with include/exclude controls and background
+  recomposition, reusing alignment and preserving the previous preview on failure.
+- Improved pose-change rejection using line-art agreement and replaced fixed
+  overlap cuts with seams that avoid moving regions where possible.
+
+- Fixed stitch previews remaining stuck as a title bar when an older collapsed
+  window state was restored.
+
+- Refined the stitch preview with a clear dimensions header, confidence badge,
+  expandable warning details, grouped zoom controls and a primary Save PNG action.
+
+- Fixed native stitch decoding continuing toward the end of the episode after the
+  last selected frame. Seek past unused preroll and stop at the selected frame count.
+- Cached alignment reference pyramids and reduced repeated pixel-scoring work.
+
+- Fixed native alignment search drift and recovery from animated poses at the start
+  of a pan. Stitch previews now identify omitted frames and their actual time range.
+
+- Added local Auto Stitch for horizontal, vertical and small diagonal camera pans,
+  with automatic boundary discovery or explicit In/Out selection.
+- Added native-resolution PNG preview/export, zoom and pan, progress, cancellation,
+  retry, configurable shortcuts and stitch settings. Jobs share the clip export worker.
+- Added bounded Rust translation matching, scene/motion rejection, adaptive sampling,
+  nonadjacent alignment checks and source-pixel overlap composition.
+- Added deterministic synthetic reconstruction tests and a generated FFmpeg video fixture.
+
 ## 0.3.1 — 2026-11-04
 
 ### New

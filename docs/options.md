@@ -61,3 +61,6 @@ Every action can be rebound. Click the shortcut, then press the new key combinat
 which action lost it. *Clear* unbinds, *Default* restores one, *Reset all* restores everything.
 
 The [Keyboard shortcuts](shortcuts.md) page in this help always lists your current bindings.
+
+Auto Stitch settings under **Export** control analysis rate, search duration in each
+direction, and short pause handling. See [Auto Stitch](stitching.md).

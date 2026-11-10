@@ -410,6 +410,8 @@ impl App {
         ui.separator();
         for (action, label) in [
             (Action::Screenshot, "Screenshot"),
+            (Action::AutoStitch, "Auto Stitch…"),
+            (Action::StitchSelection, "Stitch Selection…"),
             (Action::ScreenshotClean, "Screenshot without subtitles"),
             (Action::SetIn, "Set In here"),
             (Action::SetOut, "Set Out here"),
