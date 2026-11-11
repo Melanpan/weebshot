@@ -38,7 +38,7 @@ The bundled demo scene is available as both a WebM clip and a GIF:
 | **Linux** (x86-64) | [`weebshot-x86_64.AppImage`](https://github.com/Melanpan/weebshot/releases/latest/download/weebshot-x86_64.AppImage) | make executable and run |
 | **macOS** (Apple Silicon) | [`weebshot-macos-arm64.zip`](https://github.com/Melanpan/weebshot/releases/latest/download/weebshot-macos-arm64.zip) | right-click → Open the first time · *experimental* |
 
-Everything is included (player, ffmpeg, gifsicle) — no separate installs. Weebshot checks for
+Everything is included (player, ffmpeg, gifsicle, Anime4KCPP helper) — no separate installs. Weebshot checks for
 updates once a day and can update itself on Windows and Linux.
 More in [Installing & updating](docs/install.md).
 
@@ -147,12 +147,20 @@ For implementation details, see the [technical documentation](docs/technical/REA
 You need [Rust](https://rustup.rs) (stable). At runtime Weebshot looks for `ffmpeg` (and optionally
 `gifsicle`) next to itself, then on your `PATH`.
 
+**Anime4K upscaling also needs the `weebshot-anime4k` helper**, which `cargo build` does
+not build. It is optional for other features. Building it requires CMake 3.28+, a C++17
+compiler, FFmpeg development libraries, and OpenCL development headers and libraries
+for GPU support. See [Building the Anime4K helper](CONTRIBUTING.md#building-the-anime4k-helper)
+for commands and a CPU-only option. Cargo launches find it in `target/anime4k`
+(or `target/anime4k/Release` on Windows); installed builds look next to the app, then
+on `PATH`. The platform packaging scripts build and bundle it automatically.
+
 **Windows** — with the Visual Studio Build Tools (C++) installed:
 
 ```powershell
 ./scripts/fetch-libmpv.ps1        # downloads libmpv and creates its import library
 cargo run --release
-./scripts/package.ps1             # optional: zip with ffmpeg + gifsicle in dist/
+./scripts/package.ps1             # optional: zip with ffmpeg, gifsicle and Anime4K helper in dist/
 ```
 
 **Linux** (Ubuntu 24.04 or newer, for libmpv 0.37+):
@@ -180,5 +188,5 @@ Weebshot is free software under the [GNU General Public License v3.0 or later](L
 
 It's built on the shoulders of [mpv](https://mpv.io), [FFmpeg](https://ffmpeg.org),
 [gifsicle](https://www.lcdf.org/gifsicle/), [egui](https://github.com/emilk/egui) and
-[Phosphor icons](https://phosphoricons.com); the release packages include mpv, FFmpeg and gifsicle
+[Phosphor icons](https://phosphoricons.com); the release packages include mpv, FFmpeg, gifsicle and Anime4KCPP
 under their own licenses — see [THIRD-PARTY.md](THIRD-PARTY.md).
