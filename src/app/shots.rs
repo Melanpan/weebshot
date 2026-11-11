@@ -182,7 +182,10 @@ impl App {
                 let path = script.out_dir.join(name);
                 let ppp = ctx.pixels_per_point();
                 match save(&img, rect, ppp, &path) {
-                    Ok(()) => log::info("docs", format!("saved {}", path.display())),
+                    Ok(bytes) => {
+                        ctx.include_bytes(format!("bytes://docs/images/{name}"), bytes);
+                        log::info("docs", format!("saved {}", path.display()));
+                    }
                     Err(e) => log::error("docs", format!("{}: {e}", path.display())),
                 }
                 self.advance();
@@ -247,8 +250,11 @@ impl App {
                 self.ui.capture_mode = super::sidebar::CaptureMode::Clip;
                 self.settings.clip_format = ClipFormat::Webm;
                 let mid = (a + b) / 2.0;
-                self.timeline
-                    .zoom_to(mid - 30.0, mid + 30.0, self.player.duration);
+                self.timeline.zoom_to(
+                    (mid - 30.0).max(0.0),
+                    (mid + 30.0).min(self.player.duration),
+                    self.player.duration,
+                );
             }
             Scene::TimelineFrames => {
                 self.timeline
@@ -257,8 +263,11 @@ impl App {
             Scene::MarkerDrag => {
                 // As if the Out flag were being dragged: the viewer shows the Out frame.
                 let mid = (a + b) / 2.0;
-                self.timeline
-                    .zoom_to(mid - 30.0, mid + 30.0, self.player.duration);
+                self.timeline.zoom_to(
+                    (mid - 30.0).max(0.0),
+                    (mid + 30.0).min(self.player.duration),
+                    self.player.duration,
+                );
                 let out = b - 1.0 / self.player.fps;
                 self.player.seek(out, true);
                 let shown = self.script.as_ref().map_or(mid, |s| s.shown);
@@ -274,8 +283,11 @@ impl App {
                 self.settings.side_tab = SideTab::Capture;
                 self.ui.capture_mode = super::sidebar::CaptureMode::Clip;
                 let mid = (a + b) / 2.0;
-                self.timeline
-                    .zoom_to(mid - 30.0, mid + 30.0, self.player.duration);
+                self.timeline.zoom_to(
+                    (mid - 30.0).max(0.0),
+                    (mid + 30.0).min(self.player.duration),
+                    self.player.duration,
+                );
             }
             Scene::Queue => {
                 self.settings.clip_format = ClipFormat::Webm;
@@ -310,7 +322,7 @@ fn save(
     crop: Option<Rect>,
     ppp: f32,
     path: &std::path::Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<u8>> {
     let [w, h] = img.size;
     let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
     let mut full = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
@@ -328,8 +340,9 @@ fn save(
         full = image::imageops::resize(&full, max_w, nh, image::imageops::FilterType::Lanczos3);
     }
     let rgb = image::DynamicImage::ImageRgba8(full).to_rgb8();
-    let file = std::fs::File::create(path)?;
-    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 86);
+    let mut bytes = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 86);
     enc.encode_image(&rgb)?;
-    Ok(())
+    std::fs::write(path, &bytes)?;
+    Ok(bytes)
 }

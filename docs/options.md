@@ -21,8 +21,9 @@ Characters Windows doesn't allow in file names are replaced with `_`.
 
 ### Sounds
 
-A short sound plays when a screenshot is saved, when the export queue finishes, and when an export
-fails. Turn them off or change the volume in *Options → General*; the *Test* buttons play each one.
+A gentle single ding plays when a screenshot is saved. Separate chimes signal a finished
+export queue or an export failure. Turn sounds off or change their volume in
+*Options → General*; the *Test* buttons play each one.
 
 ### Updates
 

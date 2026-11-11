@@ -7,6 +7,8 @@
 - **Right** — the side panel with five tabs: **Capture**, **Stitch**, **Media**, **Queue** and **Logs**.
 - **Bottom** — the [timeline](timeline.md) and the status bar.
 
+Drag the sidebar's left edge to resize it. Its last selected tab is restored at launch;
+Capture opens by default. Switching tabs or capture modes preserves their settings.
 Options, Help, About and the update window open as separate windows.
 
 ## Status bar
@@ -48,18 +50,32 @@ The transport bar under it, from left to right:
 | Loop | Loop playback between In and Out |
 | Speaker + slider | Mute and volume |
 
-Every button shows its shortcut when you hover it.
+The transport switches to two rows when the viewer becomes narrower. At very narrow widths,
+each row can be scrolled horizontally to reach all controls.
+Every action button shows its shortcut when you hover it. Capture's primary actions also
+display their current shortcut on the button.
 
 ## Capture
 
 Switch between **Screenshot** and **Clip** to configure and export each type. Both use the same
-output destination as Stitch. The clipboard button copies the screenshot image or exports the
-clip and copies the finished files.
+output destination as Stitch. **Choose…** sets a directory, the folder button opens it,
+and Reset restores saving beside the source video. Hover a shortened path to see it in full.
+
+**Take Screenshot** ([S](key:Screenshot)) and **Export Clip** ([E](key:ExportClip)) save files.
+The adjacent **Copy** button copies a screenshot image ([Ctrl+Shift+C](key:CopyScreenshot))
+or exports the clip and copies its finished files ([Shift+E](key:CopyClip)).
+See [Screenshots](screenshots.md) and [Clips](clips.md) for options, including MP4/MKV
+stream copying.
 
 ## Stitch
 
-Mark a camera pan with In and Out, choose a method, and click **Stitch Selection**. The
-result window lets you review the stitch, adjust included frames, save it, or copy the image.
+Choose a method, then use **Auto Stitch** ([Shift+S](key:AutoStitch)) to discover the pan
+around the playhead, or mark In and Out and use **Stitch Selection**
+([Alt+Shift+S](key:StitchSelection)). Both actions use the marked range when both marks exist.
+**Advanced** contains the existing sampling and frame-spacing controls.
+
+The result window lets you review the stitch, adjust included frames, save it, or copy the image.
+See [Auto Stitch](stitching.md) for the complete workflow.
 
 ## Media
 
@@ -87,7 +103,8 @@ What Weebshot, mpv and ffmpeg reported, including the exact ffmpeg command lines
 Release builds open at **info+**. Select **all levels** to see debug details such as
 individual Auto Stitch alignment attempts.
 Filter by level or text; *Copy* puts the whole log on the clipboard (handy for bug reports).
-A red warning counter on the tab and in the status bar means an error was logged since you last looked.
+The Logs tab turns red when an error has been logged since you last looked. Hover it to see
+the unread count. The status bar also shows the count.
 
 ## Menus
 

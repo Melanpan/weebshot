@@ -1,6 +1,6 @@
 # Screenshots
 
-Press [S](key:Screenshot) or click **Screenshot** in the inspector. To grab a clean frame without
+Press [S](key:Screenshot) or click **Take Screenshot** in **Capture → Screenshot**. To grab a clean frame without
 subtitles regardless of the setting below, press [Ctrl+S](key:ScreenshotClean) (also in the
 preview's right-click menu).
 
@@ -9,12 +9,22 @@ The frame is saved by the video player itself, so it is:
 - **exactly the frame you see**, at the video's full resolution (not the window size),
 - rendered with **the same subtitle renderer** as the preview, including fonts embedded in the MKV.
 
+A gentle ding confirms a saved screenshot. Adjust its volume or disable sounds in
+*Options → General → Sounds*.
+
+## Copy to clipboard
+
+Click **Copy** beside Take Screenshot or press [Ctrl+Shift+C](key:CopyScreenshot) to copy the
+current frame as an image. This follows the selected subtitles and preview crop.
+**Both** copies the burned-in version. The copied image can be pasted into an application
+that accepts images.
+
 ## Options
 
-- **Format** — PNG (lossless, default), JPG (quality 95), or WebP (quality 92).
+- **Format** — PNG (lossless, default), JPEG (quality 95), or WebP (quality 92).
 - **Subtitles**
   - *No subs* — clean frame.
-  - *Burn in* — with the subtitles shown in the preview.
+  - *Burn in* — with the selected subtitle track.
   - *Both* — saves two files at once, `…_subbed` and `…_raw`.
 
   Subtitle options are disabled when no subtitle track is selected.

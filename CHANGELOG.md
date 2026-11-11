@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Replaced Inspector with Capture, Stitch, Media, Queue, and Logs tabs. Capture separates
+  Screenshot and Clip settings. The selected tab is restored at launch.
+- Added dedicated Auto Stitch and Stitch Selection sidebar actions using the shared timeline range.
+- Added clipboard buttons and rebindable shortcuts for screenshot images, exported clip files,
+  and full-resolution stitch results.
+- Added MP4/MKV Copy mode to preserve compressed video and selected audio without re-encoding,
+  with keyframe cuts and source-codec compatibility requirements.
+- Kept capture shortcuts visible at narrow sidebar widths and made playback controls use
+  two rows with scrolling when space is limited.
+- Replaced the screenshot shutter sound with a gentle ding.
+
 - Added a stitch fallback for two side-by-side regions panning vertically at
   different speeds, with a preview warning to inspect the divider.
 - Added stitch method selection, adjustable frame spacing, and a manual divider

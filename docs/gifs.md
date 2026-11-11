@@ -22,9 +22,9 @@ The export runs in up to three steps (all visible in the Queue and Logs):
 
 ## Optimization options
 
-![GIF settings in the inspector](images/gif-options.jpg)
+![GIF settings in Capture → Clip](images/gif-options.jpg)
 
-Open *GIF optimization* in the Clip section. The **Small / Balanced / High** preset buttons set all
+Choose GIF in **Capture → Clip** and open *GIF optimization*. The **Small / Balanced / High** preset buttons set all
 of these at once.
 
 | Option | What it does |

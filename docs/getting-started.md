@@ -17,7 +17,7 @@ animated WebP) out of anime episodes — with or without the subtitles burned in
 3. **Screenshot** — press [S](key:Screenshot). The current frame is saved at full resolution.
 4. **Clip** — set the start with [I](key:SetIn) and the end with [O](key:SetOut)
    (or press [X](key:MarkSubtitleLine) to mark exactly the subtitle line on screen), pick a format in the
-   inspector on the right, and press [E](key:ExportClip).
+   **Capture → Clip** on the right, and press [E](key:ExportClip).
 
 Exports run in the background; watch them in the **Queue** tab of the side panel (or the progress
 wheel in the status bar).
@@ -42,5 +42,5 @@ the same files as this documentation, and every shortcut shown matches your curr
 
 ## Where files go
 
-By default, next to the video you opened. Change it in the inspector's **Output** section or in
+By default, next to the video you opened. Change it under **Output destination** in Capture or Stitch or in
 *Options → General*, where you can also change the file name pattern.

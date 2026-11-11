@@ -21,7 +21,7 @@ left out, or both.
 
 ## What it makes
 
-The scene above, marked with one key press on its subtitle line and exported twice:
+The bundled demo scene is available as both a WebM clip and a GIF:
 
 <img src="docs/examples/gekota-kick.gif" alt="Example GIF: 'Take this! Heroic Gekota Kick!' with burned-in subtitles" width="480">
 
@@ -64,33 +64,44 @@ More in [Installing & updating](docs/install.md).
 - Exports can include subtitles, leave them out, or do both in one go (`…_subbed` / `…_raw`).
 
 ### Screenshots
+
 - Taken by the player itself, at full source resolution (not the window size), as PNG, JPG or
   WebP. `S` uses your current subtitle setting, `Ctrl+S` gives a clean frame.
+- **Copy** (`Ctrl+Shift+C`) copies the screenshot image. A gentle ding confirms a saved screenshot.
 
 ### Auto Stitch
 
 Reconstruct illustrations from horizontal, vertical, or small diagonal camera pans.
-Position the playhead inside a pan and choose **Export → Auto Stitch** (`Shift+S`),
+Use the **Stitch** sidebar tab for **Auto Stitch** (`Shift+S`) around the playhead,
 or mark In/Out and choose **Stitch Selection** (`Alt+Shift+S`). Preview, zoom, pan,
 and save the native-resolution result as PNG. See [Auto Stitch](docs/stitching.md)
 for settings, resource limits, and supported scenes. In/Out marks override automatic
 discovery; clear them to search around the playhead.
 
 ### Clips
+
 - WebM (VP9/Opus), MP4 (H.264/AAC), MKV, GIF, animated WebP.
+- MP4 and MKV offer **Encoding → Copy** to preserve the source video and selected audio.
+  Cuts follow source keyframes, subtitles are omitted, and the source codecs must fit the container.
+  See [Copy without re-encoding](docs/clips.md#copy-without-re-encoding).
+- **Copy** (`Shift+E`) exports the clip and copies the finished files to the clipboard.
 - Can target a file size (4/8/10/25/50 MB, e.g. for imageboards or Discord) with a 2-pass encode
   that lands just under it.
 - Can also repeat a clip's content a set number of times, for making loop videos.
 - GPU encoding via NVENC, Quick Sync or AMF, where available — found by actually testing each one
   rather than just checking for drivers.
-- 10-bit sources are converted so clips play back everywhere; cuts are frame-accurate.
+- Re-encoding converts 10-bit sources for broad playback compatibility and makes frame-accurate cuts.
 
 ### GIFs
+
 - Per-clip optimal palette, duplicate-frame dropping (anime is often drawn on 2s/3s),
   changed-area-only encoding, adjustable colors and dithering, and optional gifsicle lossy
   compression, with Small/Balanced/High presets.
 
 ### Other things
+
+- Resizable sidebar with **Capture**, **Stitch**, **Media**, **Queue**, and **Logs** tabs.
+  The selected tab is remembered, and Capture shares its output folder with Stitch.
 - Export queue runs in the background, with progress, retry, and a log of every ffmpeg command run.
 - Rebindable shortcuts, a few themes (Gruvbox, Nord, Catppuccin, Dracula), UI scaling.
 - Built-in documentation (F1) that reflects your current key bindings.
@@ -105,7 +116,9 @@ discovery; clear them to search around the playhead.
 
 ![Gruvbox theme](docs/images/theme-gruvbox.jpg)
 
-![Weebshot on macOS](docs/images/macos.jpg)
+![Earlier Weebshot interface on macOS](docs/images/macos.jpg)
+
+The macOS screenshot shows an earlier interface.
 
 </details>
 

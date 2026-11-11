@@ -16,7 +16,8 @@ discovery. A single mark must be completed or cleared before either action runs.
 ## Automatic workflow
 
 Open a video, place the playhead inside a pan, clear any In/Out marks, and choose
-**Export → Auto Stitch**. The action is also in the video context menu. Weebshot
+**Auto Stitch** on the **Stitch** tab. It is also available under **Export → Auto Stitch**
+and in the video context menu. Weebshot
 searches backward and forward from the playhead, then opens a preview of the result.
 
 ## Stitching a specific range
@@ -38,6 +39,10 @@ to reset. The zoom multiplier is relative to the fitted view.
 **Save PNG…** in the bottom-right corner opens a destination dialog using your screenshot output directory
 (or the video's directory). Saving copies the exact native-resolution PNG behind
 the preview; the video remains untouched.
+
+**Copy** beside the save buttons, or [Alt+C](key:CopyStitch), copies the full-resolution
+stitch as an image for pasting into another application. Apply frame-selection changes
+before copying.
 
 **Save PSD…** writes a Photoshop document with the aligned frames on separate
 pixel layers and the overlap seams on editable layer masks. The two-vertical-layer

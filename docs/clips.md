@@ -7,9 +7,17 @@
 3. Press [E](key:ExportClip). The export appears in the **Queue** tab, and a chime plays when the
    queue is done (see *Options → General → Sounds*).
 
+## Copy exported files to clipboard
+
+Click **Copy** beside Export Clip or press [Shift+E](key:CopyClip). Weebshot exports using
+the current settings, then copies the completed files so you can paste them into an
+application that accepts file attachments. With **Both** subtitle variants selected,
+both files are copied after they finish. A failed or cancelled export does not replace
+the clipboard with a partial set.
+
 ## Formats
 
-| Format | Video / audio | Good for |
+| Format | Re-encoded video / audio | Good for |
 | --- | --- | --- |
 | WebM | VP9 + Opus | Imageboards, Discord, the web. Best quality per MB. |
 | MP4 | H.264 + AAC | Plays everywhere (phones, Twitter/X, messengers). |
@@ -21,9 +29,12 @@ Re-encoded video is converted to 8-bit 4:2:0 for broad playback compatibility, w
 
 ## Copy without re-encoding
 
+![MP4 stream-copy settings in Capture → Clip](images/copy-options.jpg)
+
 For **MP4** and **MKV**, choose **Copy** under **Encoding** to preserve the original video
 and selected audio track. **Include audio** still controls whether that track is included.
 Copy mode uses the existing export queue and supports the Export Clip and clipboard actions.
+Re-encode is the default. The chosen mode is saved between launches.
 
 The cut begins at the preceding keyframe, so the exported clip may include footage before
 the In marker. File size and exact cut timing depend on the source. MP4 requires source
@@ -52,11 +63,12 @@ size at the bottom of the cropped picture (image subtitles are cropped along wit
 
 - **Resolution** — *Original* or a maximum height (1080p … 240p). Never upscales.
 - **Frame rate** — *Original* or a maximum (60 … 12 fps). Never adds frames above the source rate.
-- **Include audio** — uses the audio track selected under **Tracks**, downmixed to stereo.
+- **Include audio** — uses the audio track selected in **Media → Tracks**. Re-encoding
+  downmixes it to stereo; Copy preserves its original channels and codec.
 
 ## Loop
 
-Set **Loop** to repeat the clip's content 1–20 times in the output file — for turning a short cut
+With **Re-encode** selected, set **Loop** to repeat the clip's content 1–20 times in the output file — for turning a short cut
 into a loop video. Audio loops in sync with the video, and it works for every format. Before
 exporting, check the seam with [Ctrl+Space](key:PlayFromIn) or [Shift+Space](key:PlayToOut) — see
 [Timeline & seeking](timeline.md) (*Looping*).
