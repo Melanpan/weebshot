@@ -72,7 +72,12 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
 fn curl(max_secs: u32) -> Command {
     let mut cmd = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
     cmd.args(["-fsSL", "--retry", "2", "-A", "weebshot-updater"])
-        .args(["--connect-timeout", "15", "--max-time", &max_secs.to_string()])
+        .args([
+            "--connect-timeout",
+            "15",
+            "--max-time",
+            &max_secs.to_string(),
+        ])
         .stdin(Stdio::null());
     hide_console(&mut cmd);
     cmd
