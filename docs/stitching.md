@@ -158,7 +158,7 @@ a cut is rejected rather than silently shortened.
 
 Limits: a selection of 60 seconds, 1,000 analysis samples, 96 selected source frames,
 16 megapixels per source frame, and a 32 megapixel output with at most 16,384 pixels
-on either edge. A decoder invocation times out after 120 seconds. Shorter ranges
+on either edge. A decoder invocation times out after 120 seconds without output. Shorter ranges
 reduce processing time and memory use. Analysis is downscaled. Composition uses source pixels for translation-only
 methods and resamples frames for Shift and scale. FFmpeg applies source orientation. Non-square source pixels
 are displayed at their source aspect ratio and saved with PNG pixel aspect metadata;

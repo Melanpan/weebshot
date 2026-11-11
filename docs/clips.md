@@ -22,8 +22,9 @@ height limit. A 960×540 crop becomes 1920×1080 with no cap, or 1280×720 with 
   Logs tabs. GPU mode requires a driver exposing a compatible OpenCL GPU. CPU works without a
   GPU driver. This choice is independent of the clip's hardware video encoder.
 
-Weebshot stores two lossless FFV1 videos in the system temporary directory until the export
-finishes. Space depends on the clip length, crop, frame rate, and how well the frames compress.
+Weebshot stages two lossless FFV1 videos beside the output destination until the export
+finishes, fails, or is cancelled, then removes them. Free space is needed on the destination
+filesystem. Space depends on the clip length, crop, frame rate, and how well the frames compress.
 For scale, the two intermediates for a 10-second 1080p clip at 24 fps would occupy about 15 GB
 before FFV1 compression. A lower final height cap still uses the full 2× intermediate.
 
