@@ -1,6 +1,6 @@
 //! Little UI sounds (screenshot taken, export done/failed), played through a second,
-//! audio-only mpv instance so no extra audio library is needed. The shutter is a
-//! recorded sample (assets/sounds); the chimes are synthesized at startup.
+//! audio-only mpv instance so no extra audio library is needed.
+//! The chimes are synthesized at startup.
 
 use std::f32::consts::TAU;
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ impl Sound {
 
     fn file_name(self) -> &'static str {
         match self {
-            Self::Screenshot => "shutter.wav",
+            Self::Screenshot => "screenshot.wav",
             Self::ExportDone => "done.wav",
             Self::ExportFailed => "failed.wav",
         }
@@ -37,9 +37,6 @@ impl Sound {
 }
 
 const RATE: u32 = 44_100;
-
-/// Camera shutter click (CC0, see assets/sounds/README.md).
-const SHUTTER: &[u8] = include_bytes!("../assets/sounds/shutter.wav");
 
 pub struct Sounds {
     mpv: Option<Mpv>,
@@ -52,10 +49,7 @@ impl Sounds {
         let written = std::fs::create_dir_all(&dir).and_then(|()| {
             for s in Sound::ALL {
                 let path = dir.join(s.file_name());
-                match s {
-                    Sound::Screenshot => std::fs::write(&path, SHUTTER)?,
-                    _ => write_wav(&path, &synth(s))?,
-                }
+                write_wav(&path, &synth(s))?;
             }
             Ok(())
         });
@@ -115,7 +109,9 @@ fn synth(sound: Sound) -> Vec<f32> {
 
     let mut out = Vec::new();
     match sound {
-        Sound::Screenshot => {} // recorded sample, see SHUTTER
+        Sound::Screenshot => {
+            note(&mut out, 0.0, 880.0, 0.55, 0.16); // A5, a quiet single ding.
+        }
         Sound::ExportDone => {
             note(&mut out, 0.0, 659.25, 0.35, 0.3); // E5
             note(&mut out, 0.11, 987.77, 0.55, 0.3); // B5
@@ -154,14 +150,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shutter_sample_is_a_wav() {
-        assert_eq!(&SHUTTER[..4], b"RIFF");
-        assert_eq!(&SHUTTER[8..12], b"WAVE");
-    }
-
-    #[test]
     fn sounds_are_short_and_in_range() {
-        for s in [Sound::ExportDone, Sound::ExportFailed] {
+        for s in Sound::ALL {
             let samples = synth(s);
             assert!(!samples.is_empty());
             assert!(samples.len() < RATE as usize, "{s:?} longer than a second");

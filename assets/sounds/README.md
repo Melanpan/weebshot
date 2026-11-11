@@ -5,4 +5,5 @@
   [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain). Trimmed to a
   single shutter release and level-adjusted.
 
-The export chimes are synthesized in code (`src/sounds.rs`).
+Screenshot and export chimes are synthesized in code (`src/sounds.rs`). The shutter sample
+is retained for attribution and is no longer used by the application.
