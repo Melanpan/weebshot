@@ -22,7 +22,7 @@ searches backward and forward from the playhead, then opens a preview of the res
 ## Stitching a specific range
 
 Mark **In** ([I](key:SetIn)) and **Out** ([O](key:SetOut)) around the pan, then choose
-**Auto Stitch Selection** on the **Stitch** tab, or right-click the timeline and choose
+**Stitch Selection** on the **Stitch** tab, or right-click the timeline and choose
 **Stitch Selection**. Stitching stays inside that range. Use this when automatic
 discovery misses the intended section or you want only part of a pan.
 

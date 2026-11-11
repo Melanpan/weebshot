@@ -178,18 +178,45 @@ impl App {
 
     fn stitch_tab(&mut self, ui: &mut egui::Ui) {
         let marked = self.in_point.is_some() && self.out_point.is_some();
-        self.selection_info(ui, marked, "Set both In and Out around the camera pan.");
+        self.selection_info(
+            ui,
+            marked,
+            "Set In/Out for a selection, or use Auto Stitch at the playhead.",
+        );
         ui.separator();
         heading(ui, "Stitch settings");
-        self.stitch_settings(ui, false);
+        self.stitch_settings(ui, true);
         ui.separator();
         self.output_ui(ui);
         ui.add_space(5.0);
-        let ready = self.stitch.progress().is_some()
-            || (marked && self.player.file.is_some() && self.tool_status.ffmpeg.is_ok());
+        let running = self.stitch.progress().is_some();
+        let ready = self.player.file.is_some() && self.tool_status.ffmpeg.is_ok();
+        let complete_range = !self.has_range() || marked;
         ui.horizontal(|ui| {
-            self.primary_action(ui, Action::StitchSelection, "Auto Stitch Selection", ready);
+            self.primary_action(
+                ui,
+                Action::AutoStitch,
+                "Auto Stitch",
+                running || (ready && complete_range),
+            );
         });
+        let shortcut = self.settings.keymap.text(Action::StitchSelection);
+        let label = if shortcut.is_empty() {
+            "Stitch Selection".to_owned()
+        } else {
+            format!("Stitch Selection   ({shortcut})")
+        };
+        if ui
+            .add_enabled(
+                running || (ready && marked),
+                egui::Button::new(label).min_size(vec2(ui.available_width(), 28.0)),
+            )
+            .on_hover_text("Stitch the timeline's In/Out selection")
+            .on_disabled_hover_text("Load a video and set both In and Out around the camera pan")
+            .clicked()
+        {
+            self.pending.push(Action::StitchSelection);
+        }
     }
 
     pub(super) fn stitch_settings(&mut self, ui: &mut egui::Ui, discovery: bool) {

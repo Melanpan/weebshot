@@ -58,7 +58,7 @@ clip and copies the finished files.
 
 ## Stitch
 
-Mark a camera pan with In and Out, choose a method, and click **Auto Stitch Selection**. The
+Mark a camera pan with In and Out, choose a method, and click **Stitch Selection**. The
 result window lets you review the stitch, adjust included frames, save it, or copy the image.
 
 ## Media
