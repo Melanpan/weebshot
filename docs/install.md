@@ -23,6 +23,28 @@ The AppImage works on current desktop distributions (built on Ubuntu 24.04; test
 Fedora and Arch). If it doesn't start, your system may be missing FUSE — install `libfuse2`
 (`fuse2` on Arch), or run it with `--appimage-extract-and-run`.
 
+## Fedora RPM
+
+Download **`weebshot-x86_64.rpm`** and install it with:
+
+```sh
+sudo dnf install ./weebshot-x86_64.rpm
+```
+
+This installs a menu entry and the `weebshot` command. The RPM includes the same
+media tools, player libraries, and Anime4K helper as the AppImage, so RPM Fusion
+is not required for those features. System graphics and windowing dependencies
+are resolved by dnf. The bundled runtime is private to Weebshot.
+
+To upgrade, download the new RPM and run the same command. To uninstall:
+
+```sh
+sudo dnf remove weebshot
+```
+
+RPM installations use dnf for upgrades; the in-app update check opens the release
+page. There is no automatic RPM repository configured.
+
 ## macOS (Apple Silicon)
 
 1. Download **`weebshot-macos-arm64.zip`** and unzip it.
@@ -39,7 +61,7 @@ appears in the status bar. It opens a window with the release notes and these ch
 
 - **Update and restart** (Windows, Linux AppImage) — downloads the new version, replaces the
   current one and starts it again. Running exports are stopped, so let them finish first.
-- **Open release page** — download it yourself (this is the only option on macOS).
+- **Open release page** — download it yourself (this is the download option for macOS and RPM installations).
 - **Skip this version** — don't mention this version again.
 
 You can also check by hand with *Help → Check for updates…*, and turn the daily check off in

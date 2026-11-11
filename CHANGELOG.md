@@ -111,6 +111,12 @@
 
 ### Builds and verification
 
+- **Fedora RPM** added as a v0.4.0 release asset and to future release builds. It includes the
+  tested bundled media runtime, installs the launcher/menu entry/icon, and supports dnf
+  installation, upgrades, and removal. Fedora container checks verify installation, codecs,
+  CPU upscaling, installed-launcher GUI exports, package integrity, and removal before publication.
+  Fedora supplies the matching core/X11 keyboard libraries to avoid a mixed-library shutdown crash.
+
 - Windows, Linux AppImage, and macOS Apple Silicon packaging now build and bundle the
   Anime4KCPP helper, its required runtime libraries, and dependency licence notices, and probe
   the packaged CPU backend. Source builds document the separate CMake helper build and a

@@ -43,16 +43,35 @@ jobs:
           sudo apt-get -o APT::Update::Error-Mode=any update
           sudo apt-get install -y --no-install-recommends libmpv-dev ffmpeg gifsicle libxkbcommon-dev libgl1-mesa-dev \
             libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev file \
-            libavformat-dev libavcodec-dev libavutil-dev ocl-icd-opencl-dev opencl-clhpp-headers
+            libavformat-dev libavcodec-dev libavutil-dev ocl-icd-opencl-dev opencl-clhpp-headers \
+            rpm desktop-file-utils
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
       - name: Build AppImage
         run: bash scripts/package-linux.sh
+      - name: Package Fedora RPM
+        run: bash scripts/package-rpm.sh
       - uses: actions/upload-artifact@v7
         with:
           name: linux
-          path: dist/weebshot-x86_64.AppImage
+          path: |
+            dist/weebshot-x86_64.AppImage
+            dist/weebshot-x86_64.rpm
+
+  fedora-rpm:
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux
+          path: dist
+      - name: Test RPM installation and runtime on Fedora
+        run: |
+          docker run --rm -v "$PWD:/work:ro" registry.fedoraproject.org/fedora:45 \
+            bash /work/scripts/test-rpm.sh /work/dist/weebshot-x86_64.rpm
 
   macos:
     runs-on: macos-15
@@ -72,7 +91,7 @@ jobs:
           path: dist/weebshot-macos-arm64.zip
 
   release:
-    needs: [windows, linux, macos]
+    needs: [windows, linux, macos, fedora-rpm]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:

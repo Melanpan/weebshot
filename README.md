@@ -36,10 +36,12 @@ The bundled demo scene is available as both a WebM clip and a GIF:
 | --- | --- | --- |
 | **Windows** 10/11 (x64) | [`weebshot-windows-x64.zip`](https://github.com/Melanpan/weebshot/releases/latest/download/weebshot-windows-x64.zip) | unzip and run `weebshot.exe` |
 | **Linux** (x86-64) | [`weebshot-x86_64.AppImage`](https://github.com/Melanpan/weebshot/releases/latest/download/weebshot-x86_64.AppImage) | make executable and run |
+| **Fedora** (x86-64) | [`weebshot-x86_64.rpm`](https://github.com/Melanpan/weebshot/releases/latest/download/weebshot-x86_64.rpm) | `sudo dnf install ./weebshot-x86_64.rpm` |
 | **macOS** (Apple Silicon) | [`weebshot-macos-arm64.zip`](https://github.com/Melanpan/weebshot/releases/latest/download/weebshot-macos-arm64.zip) | right-click → Open the first time · *experimental* |
 
 Everything is included (player, ffmpeg, gifsicle, Anime4KCPP helper) — no separate installs. Weebshot checks for
-updates once a day and can update itself on Windows and Linux.
+updates once a day and can update itself on Windows and Linux AppImage builds. Fedora RPM
+installations are upgraded with `dnf install ./weebshot-x86_64.rpm`.
 More in [Installing & updating](docs/install.md).
 
 ## Features

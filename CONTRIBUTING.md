@@ -21,8 +21,11 @@ docker run --rm -v "${PWD}:/src:ro" ubuntu:24.04 bash -c "apt-get update && apt-
   `cargo clippy -- -D warnings` and `cargo test` on Windows and Linux.
 - `.github/workflows/release.yml` — on a `v*` tag: builds the Windows zip
   (`scripts/package.ps1`, with pinned ffmpeg and gifsicle), the Linux AppImage
-  (`scripts/package-linux.sh`) and the macOS app (`scripts/package-macos.sh`), then publishes a
-  GitHub Release with all three attached and generated release notes.
+  (`scripts/package-linux.sh`), Fedora RPM (`scripts/package-rpm.sh`), and the macOS app
+  (`scripts/package-macos.sh`), then publishes a GitHub Release with all four attached.
+  The RPM is installed, exercised, and removed in a clean Fedora container before publication.
+- `.github/workflows/rpm.yml` — manually adds an RPM to an existing release using its published,
+  checksum-verified AppImage; it runs the same Fedora install/runtime/removal check first.
 
 To release:
 
@@ -125,3 +128,29 @@ packaging staging directories. Rebuild the helper after changing native code.
 
 Use `probe gpu` to exercise OpenCL on supported hardware. To build a CPU-only helper, pass
 `-DAC_CORE_WITH_OPENCL=OFF` at configure time.
+
+## Building the Fedora RPM
+
+Build the Linux AppImage first, then run:
+
+```sh
+./scripts/package-rpm.sh
+# Or repackage an existing release (must match the supplied version):
+./scripts/package-rpm.sh /path/to/weebshot-x86_64.AppImage 0.4.0
+```
+
+Requires `rpmbuild`, `rpm`, Python 3.11+, `readelf`, and `desktop-file-validate`.
+On Fedora, install `rpm-build`, `binutils`, and `desktop-file-utils`; on Ubuntu,
+install `rpm`, `binutils`, and `desktop-file-utils`. The script creates
+`dist/weebshot-x86_64.rpm` with versioned RPM metadata. This is an upstream binary
+package: it preserves the tested AppImage runtime under `/usr/lib64/weebshot`,
+adds a launcher/menu entry/icon, and lets RPM generate requirements for external
+libraries while filtering private bundled SONAMEs. It does not need FUSE.
+
+Test installation, media tools, 2x upscaling, installed-launcher GUI exports under Xvfb,
+file verification, and removal in a clean Fedora container (the test installs/removes packages, so use a disposable container):
+
+```sh
+podman run --rm --security-opt label=disable -v "$PWD:/work:ro" registry.fedoraproject.org/fedora:45 \
+  bash /work/scripts/test-rpm.sh /work/dist/weebshot-x86_64.rpm
+```
