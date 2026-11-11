@@ -106,6 +106,8 @@
 - **Tool redetection** waits until exports and stitches have finished before replacing their worker.
   Anime4K two-pass analysis and GIF processing avoid opening an unused source audio input.
 - **Windows build checks** no longer fail on Unix-only scratch-directory mutability warnings.
+- **macOS release tests** now use Homebrew's library search path so the test executable can
+  link the installed libmpv before packaging.
 
 ### Builds and verification
 

@@ -60,7 +60,8 @@ jobs:
         run: brew install mpv ffmpeg gifsicle dylibbundler pkgconf cmake
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test
+      - name: Test with Homebrew libraries
+        run: LIBRARY_PATH="$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" cargo test
       - name: Build app
         run: bash scripts/package-macos.sh
       - uses: actions/upload-artifact@v7
