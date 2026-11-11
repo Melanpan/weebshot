@@ -3007,6 +3007,7 @@ version = "0.3.1"
 dependencies = [
  "ag-psd",
  "anyhow",
+ "arboard",
  "crossbeam-channel",
  "eframe",
  "egui",

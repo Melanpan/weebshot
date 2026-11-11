@@ -69,6 +69,8 @@ pub mod icon {
     pub const REPEAT: &str = "\u{e3f6}";
     pub const SPEAKER: &str = "\u{e44a}";
     pub const SPEAKER_OFF: &str = "\u{e45a}";
+    pub const LAYERS: &str = "\u{e1cc}";
+    pub const CLIPBOARD: &str = "\u{e196}";
     pub const CAMERA: &str = "\u{e10e}";
     pub const FILM_SLATE: &str = "\u{e8c2}";
     pub const FOLDER_OPEN: &str = "\u{e256}";

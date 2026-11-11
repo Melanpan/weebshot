@@ -9,6 +9,9 @@ use crate::tracks::TrackKind;
 use crate::util::{fmt_time, fmt_timecode, frame_at, parse_position};
 
 const TRANSPORT_HEIGHT: f32 = 44.0;
+const TRANSPORT_SINGLE_ROW_WIDTH: f32 = 1360.0;
+const TRANSPORT_GROUP_WIDTH: f32 = 740.0;
+const TRANSPORT_INSET: egui::Vec2 = vec2(10.0, 4.0);
 
 /// How the video is framed in the preview.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -225,9 +228,23 @@ impl App {
 
     pub(super) fn viewer(&mut self, ui: &mut egui::Ui) {
         let full = ui.available_rect_before_wrap();
+        let transport_width = full.width() - 2.0 * TRANSPORT_INSET.x;
+        let single_row = transport_width >= TRANSPORT_SINGLE_ROW_WIDTH;
+        let scroll_rows = transport_width < TRANSPORT_GROUP_WIDTH;
+        let scroll_style = egui::style::ScrollStyle::solid();
+        let row_height = if scroll_rows {
+            TRANSPORT_HEIGHT + scroll_style.allocated_width()
+        } else {
+            TRANSPORT_HEIGHT
+        };
+        let transport_height = if single_row {
+            row_height
+        } else {
+            2.0 * row_height
+        };
         let video_rect = egui::Rect::from_min_max(
             full.min,
-            egui::pos2(full.max.x, (full.max.y - TRANSPORT_HEIGHT).max(full.min.y)),
+            egui::pos2(full.max.x, (full.max.y - transport_height).max(full.min.y)),
         );
         let transport_rect =
             egui::Rect::from_min_max(egui::pos2(full.min.x, video_rect.max.y), full.max);
@@ -287,14 +304,68 @@ impl App {
             }
         }
 
-        let mut transport = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(transport_rect.shrink2(vec2(10.0, 4.0)))
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
         ui.painter()
             .rect_filled(transport_rect, 0.0, self.palette.bg1);
-        self.transport(&mut transport);
+        if single_row {
+            let mut row = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("transport")
+                    .max_rect(transport_rect.shrink2(TRANSPORT_INSET))
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            self.transport_playback(&mut row);
+            row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.transport_controls(ui);
+            });
+        } else {
+            for (index, layout) in [
+                egui::Layout::left_to_right(egui::Align::Center),
+                egui::Layout::right_to_left(egui::Align::Center),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let rect = egui::Rect::from_min_size(
+                    transport_rect.min + vec2(0.0, index as f32 * row_height),
+                    vec2(transport_rect.width(), row_height),
+                )
+                .shrink2(TRANSPORT_INSET);
+                let mut row = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt(("transport-row", index))
+                        .max_rect(rect),
+                );
+                row.shrink_clip_rect(rect.intersect(transport_rect));
+                let mut add = |ui: &mut egui::Ui| {
+                    ui.with_layout(layout, |ui| {
+                        if index == 0 {
+                            self.transport_playback(ui);
+                        } else {
+                            self.transport_controls(ui);
+                        }
+                    });
+                };
+                if scroll_rows {
+                    row.spacing_mut().scroll = scroll_style;
+                    egui::ScrollArea::horizontal()
+                        .auto_shrink(false)
+                        .scroll_bar_visibility(
+                            egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                        )
+                        .show(&mut row, |ui| {
+                            ui.allocate_ui(
+                                vec2(
+                                    TRANSPORT_GROUP_WIDTH,
+                                    TRANSPORT_HEIGHT - 2.0 * TRANSPORT_INSET.y,
+                                ),
+                                add,
+                            );
+                        });
+                } else {
+                    add(&mut row);
+                }
+            }
+        }
     }
 
     /// While an In/Out marker (or the range) is dragged on the timeline the viewer shows the
@@ -434,7 +505,7 @@ impl App {
         }
     }
 
-    fn transport(&mut self, ui: &mut egui::Ui) {
+    fn transport_playback(&mut self, ui: &mut egui::Ui) {
         let loaded = self.player.file.is_some();
         ui.add_enabled_ui(loaded, |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -474,90 +545,90 @@ impl App {
 
         ui.add_space(12.0);
         self.timecode_field(ui);
+    }
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let slider =
-                egui::Slider::new(&mut self.settings.volume, 0.0..=100.0).show_value(false);
-            if ui.add_sized([90.0, 18.0], slider).changed() {
-                self.player.set_volume(self.settings.volume);
-            }
-            let muted = self.settings.volume <= 0.0;
-            let speaker = if muted {
-                icon::SPEAKER_OFF
-            } else {
-                icon::SPEAKER
-            };
-            if ui
-                .small_button(speaker)
-                .on_hover_text("Mute / unmute")
-                .clicked()
-            {
-                self.settings.volume = if muted { 70.0 } else { 0.0 };
-                self.player.set_volume(self.settings.volume);
-            }
-            ui.separator();
-            // Viewer zoom: right-to-left layout, so these read  −  [Fit]  +
-            ui.add_enabled_ui(loaded, |ui| {
-                self.action_button(ui, Action::ViewZoomIn, icon::ZOOM_IN);
-                let label = self.zoom_label();
-                ui.menu_button(label, |ui| {
-                    for (z, text) in [
-                        (ViewZoom::Fit, "Fit"),
-                        (ViewZoom::Scale(0.5), "50%"),
-                        (ViewZoom::Scale(1.0), "100% (pixel-exact)"),
-                        (ViewZoom::Scale(2.0), "200%"),
-                        (ViewZoom::Fill, "Fill (crop)"),
-                    ] {
-                        if ui.radio(self.view.zoom == z, text).clicked() {
-                            self.set_zoom(z);
-                        }
+    fn transport_controls(&mut self, ui: &mut egui::Ui) {
+        let loaded = self.player.file.is_some();
+        let slider = egui::Slider::new(&mut self.settings.volume, 0.0..=100.0).show_value(false);
+        if ui.add_sized([90.0, 18.0], slider).changed() {
+            self.player.set_volume(self.settings.volume);
+        }
+        let muted = self.settings.volume <= 0.0;
+        let speaker = if muted {
+            icon::SPEAKER_OFF
+        } else {
+            icon::SPEAKER
+        };
+        if ui
+            .small_button(speaker)
+            .on_hover_text("Mute / unmute")
+            .clicked()
+        {
+            self.settings.volume = if muted { 70.0 } else { 0.0 };
+            self.player.set_volume(self.settings.volume);
+        }
+        ui.separator();
+        // Viewer zoom: right-to-left layout, so these read  −  [Fit]  +
+        ui.add_enabled_ui(loaded, |ui| {
+            self.action_button(ui, Action::ViewZoomIn, icon::ZOOM_IN);
+            let label = self.zoom_label();
+            ui.menu_button(label, |ui| {
+                for (z, text) in [
+                    (ViewZoom::Fit, "Fit"),
+                    (ViewZoom::Scale(0.5), "50%"),
+                    (ViewZoom::Scale(1.0), "100% (pixel-exact)"),
+                    (ViewZoom::Scale(2.0), "200%"),
+                    (ViewZoom::Fill, "Fill (crop)"),
+                ] {
+                    if ui.radio(self.view.zoom == z, text).clicked() {
+                        self.set_zoom(z);
                     }
-                    ui.separator();
-                    ui.weak("Ctrl+wheel over the picture zooms at the pointer;\ndrag to pan.");
-                })
-                .response
-                .on_hover_text("Preview zoom");
-                self.action_button(ui, Action::ViewZoomOut, icon::ZOOM_OUT);
-            });
-            ui.separator();
-            ui.add_enabled_ui(loaded, |ui| {
-                let mut subs = self.settings.show_subs_preview;
-                let tip = format!(
-                    "Show subtitles in the preview ({}). Exports aren't affected.",
-                    self.settings.keymap.text(Action::ToggleSubtitles)
-                );
-                if ui
-                    .toggle_value(&mut subs, icon::SUBTITLES)
-                    .on_hover_text(tip)
-                    .changed()
-                {
-                    self.pending.push(Action::ToggleSubtitles);
                 }
-                let mut looping = self.looping;
-                let loop_tip = format!(
-                    "Loop In→Out ({})",
-                    self.settings.keymap.text(Action::ToggleLoop)
-                );
-                if ui
-                    .toggle_value(&mut looping, icon::REPEAT)
-                    .on_hover_text(loop_tip)
-                    .changed()
-                {
-                    self.pending.push(Action::ToggleLoop);
-                }
-                self.action_button(
-                    ui,
-                    Action::PlayToOut,
-                    &format!("{} {}", icon::PLAY, icon::MARK_OUT),
-                );
-                self.action_button(ui, Action::SetOut, &format!("Out {}", icon::MARK_OUT));
-                self.action_button(ui, Action::SetIn, &format!("{} In", icon::MARK_IN));
-                self.action_button(
-                    ui,
-                    Action::PlayFromIn,
-                    &format!("{} {}", icon::MARK_IN, icon::PLAY),
-                );
-            });
+                ui.separator();
+                ui.weak("Ctrl+wheel over the picture zooms at the pointer;\ndrag to pan.");
+            })
+            .response
+            .on_hover_text("Preview zoom");
+            self.action_button(ui, Action::ViewZoomOut, icon::ZOOM_OUT);
+        });
+        ui.separator();
+        ui.add_enabled_ui(loaded, |ui| {
+            let mut subs = self.settings.show_subs_preview;
+            let tip = format!(
+                "Show subtitles in the preview ({}). Exports aren't affected.",
+                self.settings.keymap.text(Action::ToggleSubtitles)
+            );
+            if ui
+                .toggle_value(&mut subs, icon::SUBTITLES)
+                .on_hover_text(tip)
+                .changed()
+            {
+                self.pending.push(Action::ToggleSubtitles);
+            }
+            let mut looping = self.looping;
+            let loop_tip = format!(
+                "Loop In→Out ({})",
+                self.settings.keymap.text(Action::ToggleLoop)
+            );
+            if ui
+                .toggle_value(&mut looping, icon::REPEAT)
+                .on_hover_text(loop_tip)
+                .changed()
+            {
+                self.pending.push(Action::ToggleLoop);
+            }
+            self.action_button(
+                ui,
+                Action::PlayToOut,
+                &format!("{} {}", icon::PLAY, icon::MARK_OUT),
+            );
+            self.action_button(ui, Action::SetOut, &format!("Out {}", icon::MARK_OUT));
+            self.action_button(ui, Action::SetIn, &format!("{} In", icon::MARK_IN));
+            self.action_button(
+                ui,
+                Action::PlayFromIn,
+                &format!("{} {}", icon::MARK_IN, icon::PLAY),
+            );
         });
     }
 

@@ -55,13 +55,16 @@ Default bindings. Every one can be changed in *Options → Shortcuts*; the help 
 | Auto Stitch | `Shift+S` |
 | Stitch Selection | `Alt+Shift+S` |
 | Export clip | `E` |
+| Copy screenshot to clipboard | `Ctrl+Shift+C` |
+| Export clip and copy to clipboard | `Shift+E` |
+| Copy stitch result to clipboard | `Alt+C` |
 | Save subtitles as… | `Alt+S` |
 
 ### General
 
 | Action | Shortcut |
 | --- | --- |
-| Switch Inspector / Queue | `Ctrl+J` |
+| Switch Capture / Queue | `Ctrl+J` |
 | Fullscreen | `F11` |
 
 ### Preview

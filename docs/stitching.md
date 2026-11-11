@@ -22,7 +22,7 @@ searches backward and forward from the playhead, then opens a preview of the res
 ## Stitching a specific range
 
 Mark **In** ([I](key:SetIn)) and **Out** ([O](key:SetOut)) around the pan, then choose
-**Export → Stitch Selection**, or right-click the timeline and choose
+**Auto Stitch Selection** on the **Stitch** tab, or right-click the timeline and choose
 **Stitch Selection**. Stitching stays inside that range. Use this when automatic
 discovery misses the intended section or you want only part of a pan.
 
@@ -87,7 +87,8 @@ when the application exits normally.
 
 ## Settings
 
-In **Options → Export → Auto Stitch**, adjust:
+Adjust the method and **Advanced** settings on the **Stitch** tab. The playhead discovery window is
+available in **Options → Export → Auto Stitch**.
 
 | Setting | Default |
 | --- | --- |

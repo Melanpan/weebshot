@@ -243,7 +243,8 @@ impl App {
                 self.settings.out_dir = Some(dir);
             }
             Scene::Main | Scene::Timeline => {
-                self.ui.side_tab = SideTab::Inspector;
+                self.settings.side_tab = SideTab::Capture;
+                self.ui.capture_mode = super::sidebar::CaptureMode::Clip;
                 self.settings.clip_format = ClipFormat::Webm;
                 let mid = (a + b) / 2.0;
                 self.timeline
@@ -270,21 +271,22 @@ impl App {
                 self.player.seek(shown, true);
                 self.settings.clip_format = ClipFormat::Gif;
                 self.ui.gif_section_open = Some(true);
-                self.ui.side_tab = SideTab::Inspector;
+                self.settings.side_tab = SideTab::Capture;
+                self.ui.capture_mode = super::sidebar::CaptureMode::Clip;
                 let mid = (a + b) / 2.0;
                 self.timeline
                     .zoom_to(mid - 30.0, mid + 30.0, self.player.duration);
             }
             Scene::Queue => {
                 self.settings.clip_format = ClipFormat::Webm;
-                self.export_clip();
+                self.export_clip(false);
                 self.settings.clip_format = ClipFormat::Gif;
-                self.export_clip();
-                self.ui.side_tab = SideTab::Queue;
+                self.export_clip(false);
+                self.settings.side_tab = SideTab::Queue;
             }
-            Scene::Logs => self.ui.side_tab = SideTab::Logs,
+            Scene::Logs => self.settings.side_tab = SideTab::Logs,
             Scene::Options => {
-                self.ui.side_tab = SideTab::Inspector;
+                self.settings.side_tab = SideTab::Capture;
                 self.settings.clip_format = ClipFormat::Webm;
                 self.ui.show_options = true;
                 self.ui.options_page = OptionsPage::Playback;
@@ -295,7 +297,7 @@ impl App {
             }
             Scene::Gruvbox => {
                 self.ui.show_docs = false;
-                self.ui.side_tab = SideTab::Inspector;
+                self.settings.side_tab = SideTab::Capture;
                 self.set_theme(ctx, Theme::GruvboxDark);
             }
             Scene::Done => {}

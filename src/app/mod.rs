@@ -1,11 +1,12 @@
 //! The main window: state, actions and top-level layout.
 
+mod clipboard;
 mod dock;
 mod docs;
-mod inspector;
 mod menu;
 mod options;
 pub mod shots;
+mod sidebar;
 mod stitching;
 mod timeline;
 mod updates;
@@ -25,14 +26,13 @@ use crate::fonts::icon;
 use crate::keymap::{Action, Binding};
 use crate::log;
 use crate::player::Player;
-use crate::settings::Settings;
-use crate::settings::{Step, StepUnit};
+use crate::settings::{Settings, SideTab, Step, StepUnit};
 use crate::sounds::{Sound, Sounds};
 use crate::subs::{CueLoader, CueSource};
 use crate::theme::Palette;
 use crate::thumbs::Thumbs;
 use crate::tracks::{TrackKind, relative_sub_index};
-use crate::util::{expand_template, frame_at, time_tag, unique_path};
+use crate::util::{expand_template, frame_at, time_tag, unique_path, unique_path_avoiding};
 use crate::waveform::Waveform;
 
 pub use shots::Script;
@@ -42,14 +42,6 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
 ];
 
 pub const SUBTITLE_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub"];
-
-/// Tabs of the right-hand panel.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SideTab {
-    Inspector,
-    Queue,
-    Logs,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OptionsPage {
@@ -103,7 +95,7 @@ struct UiState {
     show_update: bool,
     /// Action waiting for a key press in Options → Shortcuts.
     capturing: Option<Action>,
-    side_tab: SideTab,
+    capture_mode: sidebar::CaptureMode,
     /// Where the side panel was drawn last frame (for cropping docs screenshots).
     side_rect: egui::Rect,
     /// Running GPU encoder detection, and its last results.
@@ -150,8 +142,9 @@ pub struct App {
     timeline_rect: egui::Rect,
     ui: UiState,
     sounds: Sounds,
-    /// A cropped screenshot being rendered by ffmpeg.
     stitch: stitching::State,
+    clipboard: clipboard::State,
+    /// Background still-image save.
     shot_rx: Option<crossbeam_channel::Receiver<Result<Vec<String>, String>>>,
     /// Title last sent to the window, so it's only updated on change.
     window_title: String,
@@ -259,7 +252,7 @@ impl App {
                 show_about: false,
                 show_update: false,
                 capturing: None,
-                side_tab: SideTab::Inspector,
+                capture_mode: Default::default(),
                 side_rect: egui::Rect::NOTHING,
                 gif_section_open: None,
                 hw_probe: None,
@@ -277,6 +270,7 @@ impl App {
             },
             sounds: Sounds::new(),
             stitch: Default::default(),
+            clipboard: Default::default(),
             shot_rx: None,
             window_title: String::new(),
             updater: crate::update::Updater::new(),
@@ -700,7 +694,7 @@ impl App {
         }))
     }
 
-    fn export_clip(&mut self) {
+    fn export_clip(&mut self, copy: bool) {
         let (Some(input), Some(dir)) = (self.player.file.clone(), self.out_dir()) else {
             return self.error("Open a video first");
         };
@@ -764,14 +758,28 @@ impl App {
         };
 
         let stem = expand_template(&self.settings.clip_template, &self.template_vars(&[]));
+        let mut copy_jobs = Vec::new();
         for (subs, suffix) in variants {
-            let output = unique_path(&dir, &format!("{stem}{suffix}"), format.ext());
+            let output =
+                unique_path_avoiding(&dir, &format!("{stem}{suffix}"), format.ext(), |path| {
+                    self.jobs.iter().any(|entry| {
+                        matches!(entry.state, JobState::Queued | JobState::Running { .. })
+                            && entry.job.output == path
+                    })
+                });
             let job = ClipJob {
                 subs,
                 output,
                 ..base.clone()
             };
-            self.submit(job);
+            let copy_path = copy.then(|| job.output.clone());
+            let id = self.submit(job);
+            if let Some(path) = copy_path {
+                copy_jobs.push((id, path));
+            }
+        }
+        if copy {
+            self.clipboard.queue_clips(copy_jobs);
         }
         let n = self.jobs_active();
         self.info(format!("Export queued ({n} in queue) — see the Queue tab"));
@@ -797,7 +805,7 @@ impl App {
         }
     }
 
-    fn submit(&mut self, job: ClipJob) {
+    fn submit(&mut self, job: ClipJob) -> u64 {
         let id = self.next_job_id;
         self.next_job_id += 1;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -819,6 +827,7 @@ impl App {
             started: None,
             elapsed: None,
         });
+        id
     }
 
     fn play_sound(&self, sound: Sound) {
@@ -857,6 +866,7 @@ impl App {
                     };
                 }
                 JobEvent::Finished { result, .. } => {
+                    self.clipboard.clip_finished(id, result.is_ok());
                     job.elapsed = job.started.map(|s| s.elapsed());
                     finished = true;
                     job.state = match result {
@@ -1091,14 +1101,17 @@ impl App {
                 let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
             }
-            Action::ExportClip => self.export_clip(),
+            Action::ExportClip => self.export_clip(false),
+            Action::CopyClip => self.export_clip(true),
+            Action::CopyScreenshot => self.copy_screenshot(ctx),
+            Action::CopyStitch => self.copy_stitch(ctx),
             Action::ExportSubtitles => self.export_subtitles(),
             Action::ToggleDock => {
                 self.settings.show_inspector = true;
-                self.ui.side_tab = if self.ui.side_tab == SideTab::Inspector {
-                    SideTab::Queue
+                self.settings.side_tab = if self.settings.side_tab == SideTab::Queue {
+                    SideTab::Capture
                 } else {
-                    SideTab::Inspector
+                    SideTab::Queue
                 };
             }
             Action::ViewZoomIn => self.zoom_view_by(1.25),
@@ -1309,7 +1322,7 @@ impl App {
                         .clicked()
                 {
                     self.settings.show_inspector = true;
-                    self.ui.side_tab = SideTab::Logs;
+                    self.settings.side_tab = SideTab::Logs;
                 }
                 if let Some((progress, label)) = self.queue_progress() {
                     let r = ui
@@ -1318,7 +1331,7 @@ impl App {
                     let wheel = widgets::progress_ring(ui, progress, 16.0, p.accent, p.bg3);
                     if r.clicked() || wheel.clicked() {
                         self.settings.show_inspector = true;
-                        self.ui.side_tab = SideTab::Queue;
+                        self.settings.side_tab = SideTab::Queue;
                     }
                 }
                 if let crate::update::State::Available(r) = &self.updater.state
@@ -1407,45 +1420,6 @@ impl App {
         };
         Some((progress, format!("{stage}{pct}{more}")))
     }
-
-    fn side_panel(&mut self, ui: &mut egui::Ui) {
-        self.ui.side_rect = ui.max_rect().expand(8.0);
-        let p = self.palette;
-        ui.horizontal(|ui| {
-            ui.selectable_value(
-                &mut self.ui.side_tab,
-                SideTab::Inspector,
-                format!("{} Inspector", icon::SLIDERS),
-            );
-            let active = self.jobs_active();
-            let queue = if active > 0 {
-                format!("{} Queue ({active})", icon::QUEUE)
-            } else {
-                format!("{} Queue", icon::QUEUE)
-            };
-            ui.selectable_value(&mut self.ui.side_tab, SideTab::Queue, queue);
-            let errors = log::unseen_errors();
-            let logs = if errors > 0 {
-                RichText::new(format!("{} Logs {errors}", icon::TERMINAL)).color(p.error)
-            } else {
-                RichText::new(format!("{} Logs", icon::TERMINAL))
-            };
-            ui.selectable_value(&mut self.ui.side_tab, SideTab::Logs, logs);
-        });
-        ui.separator();
-        match self.ui.side_tab {
-            SideTab::Inspector => {
-                egui::ScrollArea::vertical()
-                    .auto_shrink(false)
-                    .show(ui, |ui| self.inspector(ui));
-            }
-            SideTab::Queue => self.queue_tab(ui),
-            SideTab::Logs => {
-                log::mark_seen();
-                self.logs_tab(ui);
-            }
-        }
-    }
 }
 
 impl eframe::App for App {
@@ -1458,6 +1432,7 @@ impl eframe::App for App {
         self.update_waveform(&ctx);
         self.poll_updater(&ctx);
         self.poll_screenshots();
+        self.poll_clipboard();
         self.update_window_title(&ctx);
         if self.script.is_none() {
             self.handle_input(&ctx);
@@ -1487,10 +1462,11 @@ impl eframe::App for App {
             )
             .show(ui, |ui| self.timeline_panel(ui));
         if self.settings.show_inspector {
+            let max_width = (ui.available_width() - 360.0).max(280.0);
             egui::Panel::right("side")
                 .resizable(true)
                 .default_size(440.0)
-                .min_size(280.0)
+                .size_range(280.0..=max_width)
                 .frame(
                     egui::Frame::new()
                         .fill(self.palette.bg1)

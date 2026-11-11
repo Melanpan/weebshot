@@ -44,6 +44,7 @@ impl State {
 struct PreviewActions {
     save: bool,
     save_psd: bool,
+    copy: bool,
     apply_frames: bool,
     retry: bool,
     close: bool,
@@ -168,7 +169,7 @@ fn frame_picker(
 }
 
 impl State {
-    fn preview_ui(&mut self, ui: &mut egui::Ui, p: Palette) -> PreviewActions {
+    fn preview_ui(&mut self, ui: &mut egui::Ui, p: Palette, copy_hint: &str) -> PreviewActions {
         let mut actions = PreviewActions::default();
         let out = self.output.as_ref().unwrap();
         if let Some(error) = &self.error {
@@ -383,6 +384,10 @@ impl State {
                             "Save the aligned frames and editable seam masks for Photoshop",
                         )
                         .clicked();
+                    actions.copy = ui
+                        .button(icon::CLIPBOARD)
+                        .on_hover_text(copy_hint)
+                        .clicked();
                 }
             });
         });
@@ -570,6 +575,12 @@ impl App {
         let mut open = true;
         let mut actions = PreviewActions::default();
         let palette = self.palette;
+        let shortcut = self.settings.keymap.text(crate::keymap::Action::CopyStitch);
+        let copy_hint = if shortcut.is_empty() {
+            "Copy stitch image to clipboard".into()
+        } else {
+            format!("Copy stitch image to clipboard ({shortcut})")
+        };
         let state = &mut self.stitch;
         preview_window(ctx, &mut open).show(ctx, |ui| {
             if state.id.is_some() {
@@ -588,7 +599,7 @@ impl App {
                     state.stage = "Cancelling…".into();
                 }
             } else if state.output.is_some() {
-                actions = state.preview_ui(ui, palette);
+                actions = state.preview_ui(ui, palette, &copy_hint);
             } else {
                 if let Some(error) = &state.error {
                     ui.add_space(8.0);
@@ -613,6 +624,9 @@ impl App {
                 });
             }
         });
+        if actions.copy {
+            self.copy_stitch(ctx);
+        }
         if actions.save {
             self.save_stitch(ctx, false);
         }
@@ -662,6 +676,20 @@ impl App {
         self.stitch.stage = "Queued with exports".into();
         self.stitch.error = None;
         ctx.request_repaint();
+    }
+
+    pub(super) fn copy_stitch(&mut self, ctx: &egui::Context) {
+        if !self.stitch.open || self.stitch.id.is_some() {
+            return;
+        }
+        let Some(output) = &self.stitch.output else {
+            return;
+        };
+        if self.stitch.frame_included != output.included {
+            return self.error("Apply frame changes before copying the stitch");
+        }
+        let artifact = output.artifact.clone();
+        self.load_clipboard_image(ctx, move || super::clipboard::read_image(&artifact.0));
     }
 
     fn save_stitch(&mut self, ctx: &egui::Context, layered: bool) {

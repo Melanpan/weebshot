@@ -102,6 +102,7 @@ impl App {
 
             ui.menu_button("Export", |ui| {
                 self.menu_item(ui, Action::Screenshot, "Screenshot", loaded);
+                self.menu_item(ui, Action::CopyScreenshot, "Copy screenshot", loaded);
                 self.menu_item(ui, Action::AutoStitch, "Auto Stitch…", loaded);
                 self.menu_item(
                     ui,
@@ -110,12 +111,18 @@ impl App {
                     loaded && self.in_point.is_some() && self.out_point.is_some(),
                 );
                 self.menu_item(ui, Action::ExportClip, "Export clip", loaded);
+                self.menu_item(
+                    ui,
+                    Action::CopyClip,
+                    "Export and copy clip",
+                    loaded && self.has_range(),
+                );
                 let has_cues = self.cues.as_ref().is_some_and(|c| !c.cues.is_empty());
                 self.menu_item(ui, Action::ExportSubtitles, "Save subtitles as…", has_cues);
                 ui.separator();
                 if ui.button("Show queue").clicked() {
                     self.settings.show_inspector = true;
-                    self.ui.side_tab = SideTab::Queue;
+                    self.settings.side_tab = SideTab::Queue;
                 }
                 if ui.button("Export settings…").clicked() {
                     self.ui.show_options = true;
@@ -131,10 +138,7 @@ impl App {
                         }
                     }
                 });
-                ui.checkbox(
-                    &mut self.settings.show_inspector,
-                    "Side panel (Inspector, Queue, Logs)",
-                );
+                ui.checkbox(&mut self.settings.show_inspector, "Side panel");
                 ui.checkbox(
                     &mut self.settings.show_sub_lane,
                     "Subtitle lane in timeline",
@@ -158,7 +162,7 @@ impl App {
                 }
                 if ui.button("Show logs").clicked() {
                     self.settings.show_inspector = true;
-                    self.ui.side_tab = SideTab::Logs;
+                    self.settings.side_tab = SideTab::Logs;
                 }
                 ui.separator();
                 if ui.button("Check for updates…").clicked() {
@@ -172,7 +176,7 @@ impl App {
         });
     }
 
-    /// Radio list of tracks of one kind (used by menus and the inspector).
+    /// Radio list of tracks of one kind (used by menus and the Media tab).
     pub(super) fn track_list(&mut self, ui: &mut egui::Ui, kind: TrackKind) {
         let selected = match kind {
             TrackKind::Audio => self.player.aid,

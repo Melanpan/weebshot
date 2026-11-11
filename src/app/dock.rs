@@ -185,7 +185,7 @@ impl App {
     pub(super) fn logs_tab(&mut self, ui: &mut egui::Ui) {
         let p = self.palette;
         let view = &mut self.ui.log_view;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("log_level")
                 .selected_text(view.min_level.map_or_else(
                     || "all levels".to_owned(),
@@ -205,7 +205,7 @@ impl App {
             ui.add(
                 egui::TextEdit::singleline(&mut view.search)
                     .hint_text("filter…")
-                    .desired_width(180.0),
+                    .desired_width(110.0),
             );
             ui.checkbox(&mut view.follow, "Follow");
             if ui.small_button("Copy").clicked() {
@@ -258,16 +258,19 @@ impl App {
                         Level::Warn => p.warn,
                         Level::Error => p.error,
                     };
-                    ui.label(
-                        RichText::new(format!(
-                            "{:>9.3}  {:5}  {:8}  {}",
-                            l.time,
-                            l.level.label(),
-                            l.source,
-                            l.text
-                        ))
-                        .monospace()
-                        .color(color),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "{:>9.3}  {:5}  {:8}  {}",
+                                l.time,
+                                l.level.label(),
+                                l.source,
+                                l.text
+                            ))
+                            .monospace()
+                            .color(color),
+                        )
+                        .extend(),
                     );
                 }
             });

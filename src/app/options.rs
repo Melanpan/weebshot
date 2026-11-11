@@ -313,74 +313,7 @@ impl App {
         ui.add_space(8.0);
         ui.heading("Auto Stitch");
         ui.weak("In/Out marks take precedence over playhead discovery. Stitches use clean source frames and save as PNG.");
-        let stitch = &mut self.settings.stitch;
-        use crate::stitch::Method;
-        egui::ComboBox::from_id_salt("stitch_method")
-            .selected_text(stitch.method.label())
-            .show_ui(ui, |ui| {
-                for method in Method::ALL {
-                    ui.selectable_value(&mut stitch.method, method, method.label());
-                }
-            });
-        let adaptive = matches!(stitch.method, Method::Automatic | Method::Translation);
-        let layered_motion = stitch.method == Method::LayeredMotion;
-        if layered_motion {
-            ui.weak("Mark In/Out around one vertical pan.");
-            ui.horizontal(|ui| {
-                ui.label("Prioritize");
-                ui.selectable_value(&mut stitch.prefer_background, false, "Foreground");
-                ui.selectable_value(&mut stitch.prefer_background, true, "Background");
-            });
-        } else if !adaptive {
-            ui.weak("Mark In/Out if the search window includes other shots.");
-        }
-        if stitch.method == Method::TwoVerticalLayers {
-            let mut custom = stitch.layer_divider_percent.is_some();
-            if ui
-                .checkbox(&mut custom, "Set layer divider manually")
-                .changed()
-            {
-                stitch.layer_divider_percent = custom.then_some(50);
-            }
-            if let Some(divider) = &mut stitch.layer_divider_percent {
-                ui.add(
-                    egui::Slider::new(divider, 20..=80)
-                        .suffix("%")
-                        .text("Divider from left"),
-                );
-            }
-        }
-        ui.add(
-            egui::Slider::new(&mut stitch.selection_travel, 0.02..=0.25)
-                .step_by(0.01)
-                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0))
-                .custom_parser(|text| text.trim_end_matches('%').trim().parse::<f64>().ok().map(|n| n / 100.0))
-                .text("Frame spacing"),
-        )
-        .on_hover_text(if layered_motion {
-            "Adjusts the time between selected frames. Smaller values use more frames."
-        } else {
-            "Minimum camera travel between selected frames, as a percentage of the frame. Smaller values use more frames."
-        });
-        if !layered_motion {
-            ui.add(
-                egui::Slider::new(&mut stitch.sampling_fps, 2.0..=16.0).text(if adaptive {
-                    "Analysis frames/second (adaptive)"
-                } else {
-                    "Analysis frames/second"
-                }),
-            );
-            ui.add(
-                egui::Slider::new(&mut stitch.search_seconds, 1.0..=30.0)
-                    .text("Search seconds in each direction"),
-            );
-        }
-        if adaptive {
-            ui.checkbox(
-                &mut self.settings.stitch.allow_pauses,
-                "Allow short pan pauses",
-            );
-        }
+        self.stitch_settings(ui, true);
         ui.add_space(8.0);
         ui.heading("Encoders");
         let e = &mut self.settings.encoder;

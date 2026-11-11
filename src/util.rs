@@ -95,13 +95,19 @@ pub fn expand_template(template: &str, vars: &[(&str, String)]) -> String {
 
 /// `dir/stem.ext`, or `dir/stem (2).ext` etc. if that already exists.
 pub fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
-    let first = dir.join(format!("{stem}.{ext}"));
-    if !first.exists() {
-        return first;
-    }
-    (2..)
-        .map(|n| dir.join(format!("{stem} ({n}).{ext}")))
-        .find(|p| !p.exists())
+    unique_path_avoiding(dir, stem, ext, |_| false)
+}
+
+/// Pick a free output name, including paths reserved by pending jobs.
+pub fn unique_path_avoiding(
+    dir: &Path,
+    stem: &str,
+    ext: &str,
+    reserved: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    std::iter::once(dir.join(format!("{stem}.{ext}")))
+        .chain((2..).map(|n| dir.join(format!("{stem} ({n}).{ext}"))))
+        .find(|path| !reserved(path) && !path.exists())
         .unwrap()
 }
 
@@ -140,6 +146,14 @@ pub fn human_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unique_path_skips_pending_outputs() {
+        let dir = Path::new("weebshot-test-directory");
+        let reserved = dir.join("queued.mp4");
+        let output = unique_path_avoiding(dir, "queued", "mp4", |path| path == reserved);
+        assert_eq!(output, dir.join("queued (2).mp4"));
+    }
 
     #[test]
     fn formats_times() {

@@ -27,10 +27,20 @@ impl ShotFormat {
     pub fn label(self) -> &'static str {
         match self {
             Self::Png => "PNG",
-            Self::Jpg => "JPG",
+            Self::Jpg => "JPEG",
             Self::Webp => "WebP",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SideTab {
+    #[default]
+    Capture,
+    Stitch,
+    Media,
+    Queue,
+    Logs,
 }
 
 pub const MAX_RECENT: usize = 10;
@@ -125,6 +135,7 @@ pub struct Settings {
     pub theme: Theme,
     pub ui_scale: f32,
     pub show_inspector: bool,
+    pub side_tab: SideTab,
     pub show_sub_lane: bool,
     pub show_audio_lane: bool,
     /// Subtitles visible in the preview (exports are unaffected).
@@ -181,6 +192,7 @@ impl Default for Settings {
             theme: Theme::Studio,
             ui_scale: 1.0,
             show_inspector: true,
+            side_tab: SideTab::Capture,
             show_sub_lane: true,
             show_audio_lane: true,
             show_subs_preview: true,
@@ -200,5 +212,38 @@ impl Settings {
         self.recent.retain(|p| p != &path);
         self.recent.insert(0, path);
         self.recent.truncate(MAX_RECENT);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidebar_defaults_to_capture_in_existing_settings() {
+        let settings: Settings = ron::from_str("(shot_format: Jpg)").unwrap();
+        assert_eq!(settings.side_tab, SideTab::Capture);
+        assert_eq!(settings.shot_format, ShotFormat::Jpg);
+    }
+
+    #[test]
+    fn selected_sidebar_tab_round_trips() {
+        for side_tab in [
+            SideTab::Capture,
+            SideTab::Stitch,
+            SideTab::Media,
+            SideTab::Queue,
+            SideTab::Logs,
+        ] {
+            let settings = Settings {
+                side_tab,
+                ..Default::default()
+            };
+            let saved = ron::to_string(&settings).unwrap();
+            assert_eq!(
+                ron::from_str::<Settings>(&saved).unwrap().side_tab,
+                side_tab
+            );
+        }
     }
 }

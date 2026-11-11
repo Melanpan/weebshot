@@ -42,6 +42,9 @@ pub enum Action {
     AutoStitch,
     StitchSelection,
     ExportClip,
+    CopyScreenshot,
+    CopyClip,
+    CopyStitch,
     ExportSubtitles,
     ToggleDock,
     Fullscreen,
@@ -54,7 +57,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 46] = [
         Self::Open,
         Self::Close,
         Self::LoadSubtitle,
@@ -89,6 +92,9 @@ impl Action {
         Self::AutoStitch,
         Self::StitchSelection,
         Self::ExportClip,
+        Self::CopyScreenshot,
+        Self::CopyClip,
+        Self::CopyStitch,
         Self::ExportSubtitles,
         Self::ToggleDock,
         Self::Fullscreen,
@@ -136,8 +142,11 @@ impl Action {
             Self::StitchSelection => "Stitch Selection",
             Self::ScreenshotClean => "Screenshot without subtitles",
             Self::ExportClip => "Export clip",
+            Self::CopyScreenshot => "Copy screenshot to clipboard",
+            Self::CopyClip => "Export clip and copy to clipboard",
+            Self::CopyStitch => "Copy stitch result to clipboard",
             Self::ExportSubtitles => "Save subtitles as…",
-            Self::ToggleDock => "Switch Inspector / Queue",
+            Self::ToggleDock => "Switch Capture / Queue",
             Self::Fullscreen => "Fullscreen",
             Self::ViewZoomIn => "Zoom preview in",
             Self::ViewZoomOut => "Zoom preview out",
@@ -161,7 +170,7 @@ impl Action {
             SetIn | SetOut | MarkSubtitleLine | DeleteSubtitleLine | ClearInOut | GoToIn
             | GoToOut | PlayFromIn | PlayToOut | ToggleLoop => "Marking",
             AutoStitch | StitchSelection | Screenshot | ScreenshotClean | ExportClip
-            | ExportSubtitles => "Export",
+            | CopyScreenshot | CopyClip | CopyStitch | ExportSubtitles => "Export",
             ZoomIn | ZoomOut | ZoomFit => "Timeline",
         }
     }
@@ -306,6 +315,12 @@ pub fn default_binding(action: Action) -> Option<Binding> {
             ..Binding::alt(Key::S)
         },
         ExportClip => Binding::key(Key::E),
+        CopyScreenshot => Binding {
+            shift: true,
+            ..Binding::ctrl(Key::C)
+        },
+        CopyClip => Binding::shift(Key::E),
+        CopyStitch => Binding::alt(Key::C),
         ExportSubtitles => Binding::alt(Key::S),
         ToggleDock => Binding::ctrl(Key::J),
         Fullscreen => Binding::key(Key::F11),

@@ -4,7 +4,7 @@
 
 - **Top** — the menu bar: *File*, *Mark*, *Playback*, *Export*, *View*, *Help*.
 - **Middle** — the viewer, with the transport bar under it.
-- **Right** — the side panel with three tabs: **Inspector**, **Queue** and **Logs**.
+- **Right** — the side panel with five tabs: **Capture**, **Stitch**, **Media**, **Queue** and **Logs**.
 - **Bottom** — the [timeline](timeline.md) and the status bar.
 
 Options, Help, About and the update window open as separate windows.
@@ -50,15 +50,21 @@ The transport bar under it, from left to right:
 
 Every button shows its shortcut when you hover it.
 
-## Inspector
+## Capture
 
-The first tab of the side panel. Every section can be collapsed.
+Switch between **Screenshot** and **Clip** to configure and export each type. Both use the same
+output destination as Stitch. The clipboard button copies the screenshot image or exports the
+clip and copies the finished files.
 
-- **Source** — resolution, codec, frame rate, length and chapters of the open file.
-- **Tracks** — audio and subtitle track. The preview uses exactly these tracks, and so do exports:
-  what you see is what you get.
-- **Screenshot** / **Clip** — format and options, see [Screenshots](screenshots.md) and [Clips](clips.md).
-- **Output** — where files are saved.
+## Stitch
+
+Mark a camera pan with In and Out, choose a method, and click **Auto Stitch Selection**. The
+result window lets you review the stitch, adjust included frames, save it, or copy the image.
+
+## Media
+
+**Source** shows the filename, resolution, codec, frame rate, duration, and chapter count.
+**Tracks** lets you change the playback audio and subtitles or load an external subtitle file.
 
 ## Queue
 
@@ -71,7 +77,7 @@ in order.
 
 While something is exporting, the status bar at the bottom right shows the same wheel with the
 current step — click it to jump to the Queue. [Ctrl+J](key:ToggleDock) switches between the
-Inspector and the Queue.
+Capture and Queue.
 
 ## Logs
 
