@@ -117,8 +117,8 @@
   CPU-only option; plain `cargo build` still builds the Rust app alone.
 - Release workflows run the test suite on all three platforms before packaging. Linux CI installs
   FFmpeg so generated-media tests execute rather than skip.
-- Linux CI and release builds use Ubuntu's public archive instead of the hosted image's
-  unreliable Azure mirror, and stop when package indexes cannot be refreshed instead of
+- Linux CI and release builds use a public Ubuntu mirror outside the affected `ubuntu.com`
+  DNS zone instead of the hosted image's unreliable Azure mirror, and stop when package indexes cannot be refreshed instead of
   continuing with stale indexes and stalled package downloads.
 - Added synthetic stitch reconstruction and real-FFmpeg regression fixtures for translation,
   layered motion, zoom, composition, PNG aspect metadata, frame selection, and export safety.

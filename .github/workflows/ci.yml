@@ -31,8 +31,8 @@ jobs:
         run: |
           # The man-db trigger can stall apt for most of an hour on GitHub's Ubuntu images.
           sudo rm -f /var/lib/man-db/auto-update
-          # Avoid the hosted image's Azure mirror, which can stall on DNS failures.
-          echo 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          # Avoid the hosted image's Ubuntu DNS failures; APT still verifies Ubuntu signatures.
+          echo 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
           sudo apt-get -o APT::Update::Error-Mode=any update
           sudo apt-get install -y --no-install-recommends libmpv-dev ffmpeg libxkbcommon-dev libgl1-mesa-dev libwayland-dev \
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev
