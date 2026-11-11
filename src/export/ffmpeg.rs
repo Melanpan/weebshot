@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 
 use super::{
     ClipFormat, ClipJob, Crop, HwEncoder, Quality, Step, SubSource, TempFiles, Tool, size,
@@ -395,6 +395,9 @@ impl ClipJob {
 
     /// Video bitrate for target-size mode, if enabled.
     pub fn target_video_kbps(&self) -> Result<Option<u32>> {
+        if self.stream_copy {
+            return Ok(None);
+        }
         match self.target_mb {
             Some(mb) if self.format.supports_target_size() => {
                 let audio = if self.has_audio() {
@@ -410,6 +413,61 @@ impl ClipJob {
 
     /// Every process the job runs, in order.
     pub fn build_steps(&self, tmp: &TempFiles) -> Result<Vec<Step>> {
+        if self.stream_copy {
+            ensure!(
+                self.format.supports_stream_copy(),
+                "Copy is supported for MP4 and MKV only"
+            );
+            let mut args: Vec<String> = strings([
+                "-hide_banner",
+                "-nostdin",
+                "-y",
+                "-loglevel",
+                "warning",
+                "-progress",
+                "pipe:1",
+                "-nostats",
+                "-ss",
+            ])
+            .collect();
+            args.extend([
+                secs(self.start),
+                "-t".into(),
+                secs(self.duration()),
+                "-i".into(),
+                self.input.to_string_lossy().into_owned(),
+                "-map".into(),
+                "0:v:0".into(),
+            ]);
+            if let Some(index) = self.audio_ff_index {
+                args.extend(["-map".into(), format!("0:{index}")]);
+            } else {
+                args.push("-an".into());
+            }
+            args.extend(strings([
+                "-c",
+                "copy",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-map_metadata",
+                "-1",
+                "-map_chapters",
+                "-1",
+                "-sn",
+                "-dn",
+            ]));
+            if self.format == ClipFormat::Mp4 {
+                args.extend(strings(["-movflags", "+faststart"]));
+            }
+            args.push(self.output.to_string_lossy().into_owned());
+            return Ok(vec![Step {
+                tool: Tool::Ffmpeg,
+                args,
+                label: "Copying streams",
+                weight: 1.0,
+                reports_progress: true,
+            }]);
+        }
         if self.format == ClipFormat::Gif {
             return Ok(self.gif_steps(tmp));
         }
@@ -593,6 +651,7 @@ mod tests {
             start: 83.5,
             end: 93.5,
             format,
+            stream_copy: false,
             quality: Quality::Balanced,
             target_mb: None,
             audio_ff_index: Some(1),
@@ -613,6 +672,62 @@ mod tests {
 
     fn joined(step: &Step) -> String {
         step.args.join(" ")
+    }
+
+    #[test]
+    fn stream_copy_bypasses_encoding_and_uses_selected_audio() {
+        for format in [ClipFormat::Mp4, ClipFormat::Mkv] {
+            let mut j = job(format);
+            j.stream_copy = true;
+            j.audio_ff_index = Some(3);
+            j.target_mb = Some(0.001);
+            j.max_height = Some(240);
+            j.max_fps = Some(12);
+            j.loop_count = 4;
+            j.crop = Some(Crop {
+                x: 2,
+                y: 2,
+                width: 100,
+                height: 100,
+            });
+            j.subs = Some(SubSource::Text {
+                path: "subtitles.ass".into(),
+                stream: 0,
+            });
+            assert_eq!(j.target_video_kbps().unwrap(), None);
+            let steps = j.build_steps(&tmp()).unwrap();
+            assert_eq!(steps.len(), 1);
+            let step = &steps[0];
+            assert_eq!(step.tool, Tool::Ffmpeg);
+            assert_eq!(step.label, "Copying streams");
+            assert!(step.reports_progress);
+            let args = joined(step);
+            assert!(args.contains("-ss 83.500 -t 10.000"));
+            assert!(args.contains("-map 0:v:0 -map 0:3 -c copy"));
+            assert!(args.contains("-avoid_negative_ts make_zero"));
+            assert!(args.contains("-sn -dn"));
+            for option in ["-filter_complex", "-vf", "-pass", "-crf", "-b:v"] {
+                assert!(
+                    !step.args.iter().any(|arg| arg == option),
+                    "{option} in Copy mode"
+                );
+            }
+            assert_eq!(args.contains("+faststart"), format == ClipFormat::Mp4);
+            assert_eq!(step.args.last().unwrap(), &j.output.to_string_lossy());
+        }
+    }
+
+    #[test]
+    fn stream_copy_without_audio_and_unsupported_containers() {
+        let mut j = job(ClipFormat::Mkv);
+        j.stream_copy = true;
+        j.audio_ff_index = None;
+        let args = joined(&j.build_steps(&tmp()).unwrap()[0]);
+        assert!(args.contains("-map 0:v:0 -an -c copy"));
+        for format in [ClipFormat::Webm, ClipFormat::Gif, ClipFormat::Webp] {
+            j.format = format;
+            assert!(j.build_steps(&tmp()).is_err());
+        }
     }
 
     #[test]

@@ -94,6 +94,7 @@ pub struct Settings {
 
     // Clip
     pub clip_format: ClipFormat,
+    pub clip_stream_copy: bool,
     pub quality: Quality,
     pub use_target_size: bool,
     pub target_mb: f64,
@@ -165,6 +166,7 @@ impl Default for Settings {
             shot_crop: false,
             stitch: crate::stitch::Options::default(),
             clip_format: ClipFormat::Webm,
+            clip_stream_copy: false,
             quality: Quality::Balanced,
             use_target_size: false,
             target_mb: 8.0,
@@ -218,6 +220,17 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_copy_defaults_off_and_persists_when_enabled() {
+        let mut settings: Settings = ron::from_str("(clip_format: Mp4)").unwrap();
+        assert!(!settings.clip_stream_copy);
+        settings.clip_stream_copy = true;
+        let saved = ron::to_string(&settings).unwrap();
+        let loaded: Settings = ron::from_str(&saved).unwrap();
+        assert!(loaded.clip_stream_copy);
+        assert_eq!(loaded.clip_format, ClipFormat::Mp4);
+    }
 
     #[test]
     fn sidebar_defaults_to_capture_in_existing_settings() {

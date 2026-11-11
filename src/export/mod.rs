@@ -70,6 +70,10 @@ impl ClipFormat {
     pub fn supports_target_size(self) -> bool {
         !self.is_animation()
     }
+
+    pub fn supports_stream_copy(self) -> bool {
+        matches!(self, Self::Mp4 | Self::Mkv)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +306,8 @@ pub struct ClipJob {
     pub start: f64,
     pub end: f64,
     pub format: ClipFormat,
+    /// Preserve compressed video and audio packets, bypassing all encoding settings.
+    pub stream_copy: bool,
     pub quality: Quality,
     /// Fit the output into this many MiB (2-pass), instead of constant quality.
     pub target_mb: Option<f64>,
@@ -846,6 +852,7 @@ mod tests {
             start: 20.5,
             end: 24.5,
             format,
+            stream_copy: false,
             quality: Quality::Small,
             target_mb: None,
             audio_ff_index: Some(2),
@@ -918,6 +925,78 @@ mod tests {
             let len = run(&j, id);
             println!("{}: {len} bytes", j.output.display());
             assert!(len <= 1024 * 1024, "over target");
+        }
+    }
+
+    /// Verify remuxed video/audio packets against the original source.
+    /// Uses the same fixture contract as real_ffmpeg_exports.
+    #[test]
+    #[ignore]
+    fn real_ffmpeg_stream_copy() {
+        fn packets(path: &Path, stream: &str) -> Vec<String> {
+            let output = Command::new(find_tool("ffprobe"))
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    stream,
+                    "-show_packets",
+                    "-show_entries",
+                    "packet=data_hash",
+                    "-show_data_hash",
+                    "sha256",
+                    "-of",
+                    "json",
+                ])
+                .arg(path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let data: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            data["packets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|packet| packet["data_hash"].as_str().unwrap().to_owned())
+                .collect()
+        }
+
+        let input = sample();
+        let video: std::collections::HashSet<_> = packets(&input, "v:0").into_iter().collect();
+        let audio: std::collections::HashSet<_> = packets(&input, "2").into_iter().collect();
+        assert!(!video.is_empty() && !audio.is_empty());
+        let mut id = 300;
+        for format in [ClipFormat::Mp4, ClipFormat::Mkv] {
+            for include_audio in [true, false] {
+                id += 1;
+                let name = format!(
+                    "copy-{}-{include_audio}.{}",
+                    std::process::id(),
+                    format.ext()
+                );
+                let mut j = job(&input, format, false, &name);
+                j.stream_copy = true;
+                j.audio_ff_index = include_audio.then_some(2);
+                run(&j, id);
+                let copied_video = packets(&j.output, "v:0");
+                assert!(!copied_video.is_empty());
+                assert!(
+                    copied_video.iter().all(|packet| video.contains(packet)),
+                    "video packets changed in {}",
+                    j.output.display()
+                );
+                let copied_audio = packets(&j.output, "a:0");
+                assert_eq!(!copied_audio.is_empty(), include_audio);
+                assert!(
+                    copied_audio.iter().all(|packet| audio.contains(packet)),
+                    "selected audio packets changed in {}",
+                    j.output.display()
+                );
+            }
         }
     }
 

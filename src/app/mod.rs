@@ -711,6 +711,7 @@ impl App {
 
         let s = &self.settings;
         let format = s.clip_format;
+        let stream_copy = s.clip_stream_copy && format.supports_stream_copy();
         let audio_ff_index = (s.include_audio && format.has_audio())
             .then(|| self.player.current(TrackKind::Audio)?.ff_index)
             .flatten();
@@ -719,6 +720,7 @@ impl App {
             start,
             end,
             format,
+            stream_copy,
             quality: s.quality,
             target_mb: (s.use_target_size && format.supports_target_size()).then_some(s.target_mb),
             audio_ff_index,
@@ -743,7 +745,11 @@ impl App {
             return self.error(format!("{e:#}"));
         }
 
-        let mode = self.effective_sub_mode(s.clip_subs);
+        let mode = if stream_copy {
+            SubMode::Off
+        } else {
+            self.effective_sub_mode(s.clip_subs)
+        };
         let subs = match mode {
             SubMode::Off => None,
             _ => match self.sub_source() {

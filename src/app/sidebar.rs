@@ -456,13 +456,40 @@ impl App {
         let s = &mut self.settings;
         egui::ComboBox::from_id_salt("clip_format")
             .width(ui.available_width())
-            .selected_text(s.clip_format.label())
+            .selected_text(
+                if s.clip_stream_copy && s.clip_format.supports_stream_copy() {
+                    format!("{} (Copy)", s.clip_format.short())
+                } else {
+                    s.clip_format.label().to_owned()
+                },
+            )
             .show_ui(ui, |ui| {
                 for f in ClipFormat::ALL {
                     ui.selectable_value(&mut s.clip_format, f, f.label());
                 }
             });
         let format = s.clip_format;
+        if format.supports_stream_copy() {
+            ui.horizontal(|ui| {
+                ui.weak("Encoding");
+                ui.selectable_value(&mut s.clip_stream_copy, false, "Re-encode");
+                ui.selectable_value(&mut s.clip_stream_copy, true, "Copy")
+                    .on_hover_text(
+                        "Copy the original video and selected audio without re-encoding",
+                    );
+            });
+        }
+        if s.clip_stream_copy && format.supports_stream_copy() {
+            ui.weak("Cuts begin at the preceding keyframe and may include extra footage.");
+            if format == ClipFormat::Mp4 {
+                ui.weak("Source video and audio codecs must be compatible with MP4.");
+            }
+            ui.separator();
+            heading(ui, "Audio");
+            ui.checkbox(&mut s.include_audio, "Include audio");
+            ui.weak("Subtitles are omitted. Choose Re-encode for subtitles, cropping, resizing or other video processing.");
+            return;
+        }
 
         if format.is_animation() {
             self.anim_ui(ui, duration);

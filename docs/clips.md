@@ -3,7 +3,7 @@
 1. Mark the range: [I](key:SetIn) / [O](key:SetOut), the `I`/`O` flags on the timeline, or
    [X](key:MarkSubtitleLine) for the subtitle line on screen. Export refuses to run without a range —
    so you never accidentally encode a whole episode.
-2. Choose the format and options in the inspector's **Clip** section.
+2. Choose the format and options in **Capture → Clip**.
 3. Press [E](key:ExportClip). The export appears in the **Queue** tab, and a chime plays when the
    queue is done (see *Options → General → Sounds*).
 
@@ -17,8 +17,21 @@
 | GIF | — | Places that only take GIFs. Large; see [GIFs](gifs.md). |
 | Animated WebP | — | A much smaller GIF alternative where supported. |
 
-Video is always converted to 8-bit 4:2:0 so clips from 10-bit releases play on any device.
-Cuts are frame-accurate (the clip is re-encoded, not stream-copied).
+Re-encoded video is converted to 8-bit 4:2:0 for broad playback compatibility, with frame-accurate cuts.
+
+## Copy without re-encoding
+
+For **MP4** and **MKV**, choose **Copy** under **Encoding** to preserve the original video
+and selected audio track. **Include audio** still controls whether that track is included.
+Copy mode uses the existing export queue and supports the Export Clip and clipboard actions.
+
+The cut begins at the preceding keyframe, so the exported clip may include footage before
+the In marker. File size and exact cut timing depend on the source. MP4 requires source
+codecs supported by its container. Incompatible streams produce an export error.
+
+Subtitles are omitted in Copy mode. Quality, target size, resolution, frame rate, cropping,
+loop count, and video processing settings apply when **Re-encode** is selected. Switching
+modes preserves those settings.
 
 ## Quality or file size
 
