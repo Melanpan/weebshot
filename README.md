@@ -78,6 +78,8 @@ and save the native-resolution result as PNG. See [Auto Stitch](docs/stitching.m
 for settings, resource limits, and supported scenes. In/Out marks override automatic
 discovery; clear them to search around the playhead.
 
+![Auto Stitch preview with four selected frames from an upward camera pan and the reconstructed image](docs/images/auto-stitch.jpg)
+
 ### Clips
 
 - WebM (VP9/Opus), MP4 (H.264/AAC), MKV, GIF, animated WebP.
