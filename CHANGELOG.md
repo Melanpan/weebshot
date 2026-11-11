@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added a stitch fallback for two side-by-side regions panning vertically at
+  different speeds, with a preview warning to inspect the divider.
+- Added stitch method selection, adjustable frame spacing, and a manual divider
+  for two-layer stitches.
+- Added Shift and scale for shots where a single artwork plane pans and zooms.
+- Added experimental Layered motion for vertical pans with foreground and
+  background motion priorities.
+- Added Photoshop PSD export with aligned frames and editable seam masks.
+
 - Release builds show info, warnings and errors by default in the Logs tab.
   Debug messages are available through the level filter.
 

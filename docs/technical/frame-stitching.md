@@ -3,8 +3,9 @@
 [Auto Stitch](../stitching.md) reconstructs artwork that a camera pan reveals over time.
 The engine models each frame as a rectangular view into the same image, with its own
 horizontal and vertical offset. This works for vertical and horizontal pans and small
-diagonal translations. Rotation, zoom, perspective changes and strong parallax fall
-outside that model.
+diagonal translations. A fallback handles a limited form of parallax with two independent
+vertical translations. An explicit Shift and scale method handles uniform zoom
+on one plane. Rotation and perspective changes remain unsupported.
 
 ## Pipeline
 
@@ -137,6 +138,68 @@ copies the generated artifact to the chosen destination without re-encoding.
 The source file is read-only, and temporary artifacts are removed when their last
 owner releases them.
 
+## Two-layer vertical pans
+
+When Automatic cannot produce a stable single-translation stitch, or the user
+selects Two vertical layers explicitly, the
+[layered matcher](../../src/stitch/layers.rs) checks the full analysis window, or
+the marked range for Stitch Selection. It tries vertical dividers at one third, one half, and two thirds of the frame width. The explicit method
+also accepts a user-specified divider between 20% and 80% of the frame width. For each divider it matches both sides independently
+on adjacent grayscale samples. Both tracks must stay reliable and move in the
+same direction, with enough difference in total travel to justify a second track.
+The whole layered analysis window must be coherent. Mark In/Out
+when the layered pan is surrounded by other shots.
+
+The faster track controls adaptive frame selection. Native alignment checks both
+tracks against up to three references, including line-art agreement. The recipe
+stores two offsets per frame, so editing the frame selection can reuse the
+alignment. Each side is composed at native resolution with its own overlap seams.
+The output uses the vertical extent covered by both sides and joins them at the
+divider. The preview flags that join for inspection. The fallback cannot track
+moving silhouettes, separate occluding layers, or compensate for changes in scale.
+
+## Shift and scale
+
+The [shift-and-scale matcher](../../src/stitch/zoom.rs) searches two-dimensional
+translation and uniform scale about the image center. Translation seeds a
+coarse-to-fine search on downscaled samples. The score checks textured pixels
+across the overlap and penalizes large residuals. The matcher composes the
+pairwise transforms and selects frames using both center travel and scale change.
+It then refines selected frames against up to three native-resolution references
+to limit drift.
+
+The resulting recipe stores each frame's scale and canvas position, so changing
+the frame selection reuses the solved transforms. Composition resamples scaled
+frames into the first frame's pixel grid and reuses the overlap seams. The canvas
+covers the union of the transformed frames and can have transparent edges.
+This method runs only when explicitly selected and requires coherent alignment
+throughout the analyzed interval.
+
+## Experimental layered motion
+
+The [layered motion matcher](../../src/stitch/foreground.rs) samples a marked
+vertical pan at 2 FPS. It matches textured patches in a high-pass grayscale image
+by normalized correlation, then fits up to five shift-and-scale models by
+consensus. It requires at least two motions with different speeds in the same
+vertical direction. The user chooses the faster foreground group or the slower
+background group. The engine accumulates the chosen transforms and stitches
+the resulting views with the existing overlap compositor. This can recover the
+overall illustration even when a single global model fails. Overlapping artwork
+is still resampled using one chosen transform per frame, so parts with different
+motions can show seams.
+
+## Layered Photoshop export
+
+PSD export reuses the recipe, decoder, frame selection, and compositor. While
+composing, it records the final source frame for each output pixel. Each
+positioned frame keeps its full aligned bitmap and receives an editable mask
+showing which of its pixels appear in the stitch. With Two vertical layers,
+each frame contributes two independently positioned bitmap layers. The full
+canvas is also stored as the document's merged image. The [ag-psd writer](https://docs.rs/ag-psd)
+serializes the document. Because it needs in-memory image and mask data, the job
+checks the total layer and canvas sizes first. Export runs on the shared worker
+and writes through the image export staging path.
+
 ## Performance and debugging
 
 Analysis retains downscaled samples. Native alignment retains a bounded set of grayscale
@@ -183,7 +246,21 @@ WEEBSHOT_STITCH_FULL_SAMPLE="/path/to/original-episode.mkv" \
 
 WEEBSHOT_STITCH_FULL_SAMPLE="/path/to/original-episode.mkv" \
   cargo test --release original_pan_at_different_playheads -- --ignored --nocapture
+
+WEEBSHOT_LAYERED_PAN_SAMPLE="/path/to/reported-layered-pan.webm" \
+  cargo test --release reported_overlapping_layers_are_rejected -- --ignored
+
+WEEBSHOT_LAYERED_PAN_SAMPLE="/path/to/reported-layered-pan.webm" \
+  cargo test --release reported_overlapping_layers_experimental_preview -- --ignored
 ```
 
 The original-episode decode comparison deliberately runs the legacy slow decode path
 and compares its frame bytes with the bounded implementation.
+The layered-pan regression checks that both actions and the explicit Shift and
+scale method reject the reported Chitose clip, where overlapping planes and scale
+changes require separate transforms and occlusion handling. The experimental
+regression checks that both priorities produce a preview. Set
+`WEEBSHOT_LAYERED_PREVIEW` or `WEEBSHOT_LAYERED_PSD` to keep an export for
+inspection. Synthetic fixture tests also verify pixel-exact two-layer output,
+scale alignment, frame deselection, and that PSD layers with their masks
+reconstruct the merged image.

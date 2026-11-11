@@ -17,7 +17,7 @@ available from the linked projects.
 
 ## Rust crates
 
-Weebshot is built with egui/eframe, egui_commonmark, libmpv2, rfd, serde, image, crossbeam and
+Weebshot is built with egui/eframe, egui_commonmark, libmpv2, rfd, serde, image, ag-psd, crossbeam and
 others — see `Cargo.toml` / `Cargo.lock` for the full list. They are MIT and/or Apache-2.0
 licensed (libmpv2: LGPL-2.1).
 

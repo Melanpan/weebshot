@@ -43,6 +43,7 @@ impl State {
 #[derive(Default)]
 struct PreviewActions {
     save: bool,
+    save_psd: bool,
     apply_frames: bool,
     retry: bool,
     close: bool,
@@ -64,6 +65,7 @@ fn chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) -> egui::Response {
 }
 
 fn details(ui: &mut egui::Ui, out: &Output) {
+    ui.label(out.method.label());
     ui.set_max_width(340.0);
     ui.label(&out.warning);
     if out.dimensions.0 > 2048 || out.dimensions.1 > 2048 {
@@ -175,11 +177,15 @@ impl State {
         ui.add_space(3.0);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(format!("{} × {}",out.dimensions.0,out.dimensions.1)).size(20.0).strong().color(p.fg));
-            chip(ui,"PNG",p.fg_dim).on_hover_text("Native-resolution PNG export");
+            chip(ui,"PNG",p.fg_dim).on_hover_text("Full-resolution PNG export");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                if out.method == crate::stitch::Method::LayeredMotion {
+                    chip(ui, "Experimental", p.warn);
+                    return;
+                }
                 let color=if out.confidence>=0.9 {p.ok}else{p.warn};
                 chip(ui,&format!("{} {:.0}% confidence",icon::CHECK,out.confidence*100.0),color)
-                    .on_hover_text("Confidence measures translation agreement. Inspect the image for local animation and overlap seams before saving.");
+                    .on_hover_text("Confidence measures alignment agreement. Inspect the image for local animation and overlap seams before saving.");
             });
         });
         ui.horizontal_wrapped(|ui| {
@@ -189,6 +195,7 @@ impl State {
                 "Down" => "↓ Downward pan",
                 "Left" => "← Leftward pan",
                 "Right" => "→ Rightward pan",
+                "Zoom" => "Zoom",
                 _ => "Diagonal pan",
             };
             for text in [format!("{} frames", out.frames), direction.into()] {
@@ -370,6 +377,12 @@ impl State {
                     actions.apply_frames = clicked;
                 } else {
                     actions.save = clicked;
+                    actions.save_psd = ui
+                        .button("Save PSD…")
+                        .on_hover_text(
+                            "Save the aligned frames and editable seam masks for Photoshop",
+                        )
+                        .clicked();
                 }
             });
         });
@@ -472,6 +485,16 @@ impl App {
             } if self.stitch.id == Some(id) => {
                 self.stitch.progress = overall;
                 self.stitch.stage = stage.into();
+                None
+            }
+            JobEvent::Finished { id, result } if self.stitch.id == Some(id) => {
+                self.stitch.id = None;
+                self.stitch.cancel = None;
+                match result {
+                    Ok(()) => self.info("Saved layered Photoshop PSD"),
+                    Err(error) if error == "cancelled" => self.info("PSD export cancelled"),
+                    Err(error) => self.error(format!("Could not save PSD: {error}")),
+                }
                 None
             }
             JobEvent::Stitched { id, result } if self.stitch.id == Some(id) => {
@@ -591,7 +614,10 @@ impl App {
             }
         });
         if actions.save {
-            self.save_stitch(ctx);
+            self.save_stitch(ctx, false);
+        }
+        if actions.save_psd {
+            self.save_stitch(ctx, true);
         }
         if actions.apply_frames {
             self.apply_stitch_frames(ctx);
@@ -638,7 +664,7 @@ impl App {
         ctx.request_repaint();
     }
 
-    fn save_stitch(&mut self, ctx: &egui::Context) {
+    fn save_stitch(&mut self, ctx: &egui::Context, layered: bool) {
         let Some(output) = &self.stitch.output else {
             return;
         };
@@ -662,16 +688,40 @@ impl App {
             .clone()
             .or_else(|| source.input.parent().map(std::path::Path::to_path_buf))
             .unwrap_or_default();
-        let suggested = unique_path(&dir, &base, "png");
+        let (format, extension) = if layered {
+            ("Photoshop document", "psd")
+        } else {
+            ("PNG image", "png")
+        };
+        let suggested = unique_path(&dir, &base, extension);
         let Some(path) = rfd::FileDialog::new()
             .set_directory(&dir)
             .set_file_name(suggested.file_name().unwrap_or_default().to_string_lossy())
-            .add_filter("PNG image", &["png"])
+            .add_filter(format, &[extension])
             .save_file()
         else {
             return;
         };
-        let path = path.with_extension("png");
+        let path = path.with_extension(extension);
+        if layered {
+            let id = self.next_job_id;
+            self.next_job_id += 1;
+            let cancel = Arc::new(AtomicBool::new(false));
+            self.runner.submit_psd(
+                id,
+                output.recipe.clone(),
+                output.included.clone(),
+                path,
+                cancel.clone(),
+            );
+            self.stitch.id = Some(id);
+            self.stitch.cancel = Some(cancel);
+            self.stitch.progress = 0.0;
+            self.stitch.stage = "Queued with exports".into();
+            self.stitch.error = None;
+            ctx.request_repaint();
+            return;
+        }
         let artifact = output.artifact.clone();
         let source_video = source.input.clone();
         let id = self.next_job_id;

@@ -1,10 +1,14 @@
 //! Local camera-pan reconstruction, independent of egui and libmpv.
 mod compose;
 mod decode;
+mod foreground;
+mod layers;
 mod motion;
 mod png;
+mod psd;
 #[cfg(test)]
 mod tests;
+mod zoom;
 
 use anyhow::{Context, Result, bail};
 use image::{
@@ -26,16 +30,50 @@ const MAX_SELECTED: usize = 96;
 const MAX_PIXELS: u64 = 32_000_000;
 const MAX_EDGE: u32 = 16384;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Method {
+    #[default]
+    Automatic,
+    Translation,
+    TwoVerticalLayers,
+    ShiftAndScale,
+    LayeredMotion,
+}
+
+impl Method {
+    pub const ALL: [Self; 5] = [
+        Self::Automatic,
+        Self::Translation,
+        Self::TwoVerticalLayers,
+        Self::ShiftAndScale,
+        Self::LayeredMotion,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::Translation => "Single translation",
+            Self::TwoVerticalLayers => "Two vertical layers",
+            Self::ShiftAndScale => "Shift and scale",
+            Self::LayeredMotion => "Layered motion (experimental)",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Options {
+    pub method: Method,
+    pub layer_divider_percent: Option<u32>,
+    pub prefer_background: bool,
     pub sampling_fps: f64,
     pub search_seconds: f64,
     pub allow_pauses: bool,
-    // Advanced thresholds are kept here rather than buried in discovery logic.
+    pub selection_travel: f32,
+    // Advanced matching thresholds.
     pub pause_seconds: f64,
     pub min_travel: f32,
-    pub selection_travel: f32,
     pub thresholds: motion::Thresholds,
     pub native_thresholds: motion::Thresholds,
     pub direction_tolerance: f32,
@@ -44,6 +82,9 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            method: Method::default(),
+            layer_divider_percent: None,
+            prefer_background: false,
             sampling_fps: 8.0,
             search_seconds: 15.0,
             allow_pauses: true,
@@ -88,6 +129,8 @@ pub struct FrameChoice {
     pub thumbnail: RgbImage,
     sample: usize,
     position: Position,
+    secondary: Option<Position>,
+    scale: f32,
 }
 
 /// Retain only small thumbnails and solved positions, never native frame caches.
@@ -103,6 +146,8 @@ pub struct Recipe {
     confidence: f32,
     omitted: usize,
     truncated: bool,
+    split: Option<u32>,
+    method: Method,
 }
 
 pub struct Output {
@@ -114,6 +159,7 @@ pub struct Output {
     pub direction: &'static str,
     pub confidence: f32,
     pub warning: String,
+    pub method: Method,
     pub omitted_frames: usize,
     pub search_limited: bool,
     pub range: (f64, f64),
@@ -342,6 +388,10 @@ pub fn run(
     {
         bail!("Choose a valid In/Out range of at most 60 seconds");
     }
+    let experimental = options.method == Method::LayeredMotion;
+    if experimental && job.range.is_none() {
+        bail!("Mark In and Out around one vertical pan to use Layered motion.");
+    }
     let initial_fps = options
         .sampling_fps
         .clamp(2.0, 16.0)
@@ -350,13 +400,13 @@ pub fn run(
     let (first, aspect) = decode::frame(ffmpeg, &job.input, start, cancel)?;
     let native = first.dimensions();
     drop(first);
-    let scale = 320.0 / native.0.max(native.1) as f64;
+    let scale = if experimental { 640.0 } else { 320.0 } / native.0.max(native.1) as f64;
     let size = (
         (native.0 as f64 * scale).round().max(24.0) as u32,
         (native.1 as f64 * scale).round().max(24.0) as u32,
     );
-    let mut fps = initial_fps;
-    let (frames, motions, lo, hi) = loop {
+    let mut fps = if experimental { 2.0 } else { initial_fps };
+    let (frames, motions, candidate) = loop {
         let mut frames = Vec::new();
         decode::samples(ffmpeg, &job.input, start, end, fps, size, cancel, |f| {
             if frames.len() >= MAX_SAMPLES {
@@ -371,6 +421,12 @@ pub fn run(
         })?;
         if frames.len() < 2 {
             bail!("The range is too short to stitch");
+        }
+        if matches!(
+            options.method,
+            Method::TwoVerticalLayers | Method::ShiftAndScale | Method::LayeredMotion
+        ) {
+            break (frames, Vec::new(), None);
         }
         let mut motions = Vec::new();
         for i in 1..frames.len() {
@@ -424,17 +480,82 @@ pub fn run(
             report(0.0, "Retrying with closer frames");
             continue;
         }
-        let (lo, hi) = candidate?;
-        break (frames, motions, lo, hi);
+        break (frames, motions, Some(candidate));
     };
-    if hi <= lo {
-        bail!("No camera movement detected. Try marking In and Out around the pan.");
-    }
-    let positions = positions(&frames, &motions, lo, hi, cancel, options)?;
-    let (dx, dy) = positions.last().unwrap().delta(positions[0]);
-    if (dx.abs() as f32 / size.0 as f32).max(dy.abs() as f32 / size.1 as f32) < options.min_travel {
-        bail!("No useful camera movement detected. Select a range with newly revealed artwork.");
-    }
+    let base_recipe = || Recipe {
+        frames: Vec::new(),
+        input: job.input.clone(),
+        start,
+        end,
+        fps,
+        native,
+        aspect,
+        confidence: 1.0,
+        omitted: 0,
+        truncated: job.range.is_none() && (start > 0.001 || end < job.duration - 0.001),
+        split: None,
+        method: Method::Translation,
+    };
+    let compose_recipe = |recipe: Recipe| -> Result<Output> {
+        let recipe = Arc::new(recipe);
+        let included = vec![true; recipe.frames.len()];
+        let mut output = recompose(ffmpeg, id, recipe, included, cancel, |fraction, stage| {
+            report(0.75 + 0.25 * fraction, stage)
+        })?;
+        output.elapsed = started.elapsed().as_secs_f32();
+        Ok(output)
+    };
+    let layered = || -> Result<Option<Output>> {
+        if options.method == Method::Translation {
+            return Ok(None);
+        }
+        report(0.65, "Checking for independently moving layers");
+        layers::recipe(&frames, base_recipe(), ffmpeg, options, cancel, &report)?
+            .map(compose_recipe)
+            .transpose()
+    };
+    let Some(candidate) = candidate else {
+        if experimental {
+            return compose_recipe(foreground::recipe(
+                &frames,
+                base_recipe(),
+                ffmpeg,
+                options,
+                cancel,
+                &report,
+            )?);
+        }
+        if options.method == Method::ShiftAndScale {
+            return compose_recipe(zoom::recipe(
+                &frames,
+                base_recipe(),
+                ffmpeg,
+                options,
+                cancel,
+                &report,
+            )?);
+        }
+        return layered()?.context(layers::LAYER_ALIGNMENT_ERROR);
+    };
+    let analysis = candidate.and_then(|(lo, hi)| {
+        if hi <= lo {
+            bail!("No camera movement detected. Try marking In and Out around the pan.");
+        }
+        let points = positions(&frames, &motions, lo, hi, cancel, options)?;
+        let (dx, dy) = points.last().unwrap().delta(points[0]);
+        if (dx.abs() as f32 / size.0 as f32).max(dy.abs() as f32 / size.1 as f32)
+            < options.min_travel
+        {
+            bail!(
+                "No useful camera movement detected. Select a range with newly revealed artwork."
+            );
+        }
+        Ok((lo, hi, points))
+    });
+    let (lo, hi, positions) = match analysis {
+        Ok(analysis) => analysis,
+        Err(error) => return layered()?.ok_or(error),
+    };
     // Manual selections must also be coherent: never silently stitch a reversal.
     let mut reference = None;
     for m in &motions[lo..hi] {
@@ -444,7 +565,8 @@ pub fn run(
         if m.moving() {
             let r = reference.get_or_insert(m);
             if m.dx * r.dx + m.dy * r.dy < 0 {
-                bail!("Pan changes direction. Select one continuous direction.");
+                return layered()?
+                    .context("Pan changes direction. Select one continuous direction.");
             }
         }
     }
@@ -555,11 +677,18 @@ pub fn run(
         },
     )?;
     drop(anchors);
-    drop(frames);
     let original_count = selected.len();
-    let best=best_component(&native_positions,&groups,native,options.min_travel)
-        .context("No stable portion of the pan could be aligned at source resolution. Try a range that avoids pose changes or heavy animation.")?;
+    let best = best_component(&native_positions, &groups, native, options.min_travel);
+    let Some(best) = best else {
+        let error = if options.method == Method::Translation {
+            "The frames could not be aligned with a single shift per frame. Try Automatic or mark a shorter In/Out range."
+        } else {
+            layers::ALIGNMENT_ERROR
+        };
+        return layered()?.context(error);
+    };
     let keep: Vec<_> = (0..selected.len()).filter(|&n| groups[n] == best).collect();
+    drop(frames);
     let confidence = keep.iter().map(|&n| qualities[n]).fold(1.0f32, f32::min);
     let recipe = Arc::new(Recipe {
         frames: keep
@@ -569,6 +698,8 @@ pub fn run(
                 thumbnail: thumbnails[n].clone(),
                 sample: lo + selected[n],
                 position: native_positions[n],
+                secondary: None,
+                scale: 1.0,
             })
             .collect(),
         input: job.input.clone(),
@@ -581,6 +712,8 @@ pub fn run(
         omitted: original_count - keep.len(),
         truncated: job.range.is_none()
             && ((lo == 0 && start > 0.001) || (hi == motions.len() && end < job.duration - 0.001)),
+        split: None,
+        method: Method::Translation,
     });
     let included = vec![true; recipe.frames.len()];
     let mut out = recompose(ffmpeg, id, recipe, included, cancel, |fraction, stage| {
@@ -590,38 +723,89 @@ pub fn run(
     Ok(out)
 }
 
-pub fn recompose(
-    ffmpeg: &std::path::Path,
-    id: u64,
-    recipe: Arc<Recipe>,
-    included: Vec<bool>,
-    cancel: &AtomicBool,
-    report: impl Fn(f32, &'static str),
-) -> Result<Output> {
-    let started = Instant::now();
-    check_cancel(cancel)?;
+fn selected_frames<'a>(recipe: &'a Recipe, included: &[bool]) -> Result<Vec<&'a FrameChoice>> {
     if included.len() != recipe.frames.len() {
         bail!("Frame selection no longer matches this stitch");
     }
     let selected: Vec<_> = recipe
         .frames
         .iter()
-        .zip(&included)
+        .zip(included)
         .filter(|(_, enabled)| **enabled)
         .map(|(frame, _)| frame)
         .collect();
     if selected.len() < 2 {
         bail!("Include at least two frames to rebuild the stitch");
     }
-    let native_positions: Vec<_> = selected.iter().map(|f| f.position).collect();
-    let indices: Vec<_> = selected.iter().map(|f| f.sample).collect();
-    let output_range = (selected[0].time, selected[selected.len() - 1].time);
-    let (dx, dy) = native_positions.last().unwrap().delta(native_positions[0]);
+    Ok(selected)
+}
+
+fn compose_frames(
+    ffmpeg: &std::path::Path,
+    recipe: &Recipe,
+    selected: &[&FrameChoice],
+    retain_layers: bool,
+    cancel: &AtomicBool,
+    report: &impl Fn(f32, &'static str),
+) -> Result<(RgbaImage, Vec<psd::Source>)> {
+    let native_positions: Vec<_> = selected.iter().map(|frame| frame.position).collect();
+    let indices: Vec<_> = selected.iter().map(|frame| frame.sample).collect();
     let native = recipe.native;
-    let aspect = recipe.aspect;
+    let scaled = matches!(recipe.method, Method::LayeredMotion | Method::ShiftAndScale);
+    let frame_sizes: Vec<_> = selected
+        .iter()
+        .map(|frame| zoom::frame_size(native, frame.scale))
+        .collect();
     report(0.0, "Composing selected frames");
-    let (min, dimensions) = bounds(&native_positions, native)?;
-    let mut composer = compose::Composer::new(dimensions);
+    let mut tracks = vec![(0, native.0, native_positions)];
+    if let Some(split) = recipe.split {
+        tracks[0].1 = split;
+        let other = selected.iter().map(|f| f.secondary.unwrap()).collect();
+        tracks.push((split, native.0 - split, other));
+    }
+    let mut planes = Vec::new();
+    let mut top = i32::MIN;
+    let mut bottom = i32::MAX;
+    let mut pixels = 0u64;
+    for (x, width, positions) in &tracks {
+        let (min, size) = if scaled {
+            zoom::bounds(positions, &frame_sizes)?
+        } else {
+            bounds(positions, (*width, native.1))?
+        };
+        top = top.max(min.y);
+        bottom = bottom.min(min.y + size.1 as i32);
+        pixels += size.0 as u64 * size.1 as u64;
+        planes.push((*x, *width, min, size));
+    }
+    if recipe.split.is_some() {
+        if pixels > MAX_PIXELS {
+            bail!("Layered stitch exceeds the 32 megapixel canvas limit. Select a shorter range.");
+        }
+        if bottom - top <= native.1 as i32 {
+            bail!(
+                "The selected frames reveal no new area shared by both layers. Include more frames."
+            );
+        }
+    }
+    if retain_layers {
+        let total: u64 = frame_sizes
+            .iter()
+            .map(|&(w, h)| u64::from(w) * u64::from(h))
+            .sum();
+        psd::check_budget(total, pixels)?;
+    }
+    let mut composers: Vec<_> = planes
+        .iter()
+        .map(|p| {
+            let mut composer = compose::Composer::new(p.3);
+            if retain_layers {
+                composer.track_sources();
+            }
+            composer
+        })
+        .collect();
+    let mut layers = Vec::new();
     decode::selected_frames(
         ffmpeg,
         &recipe.input,
@@ -635,17 +819,124 @@ pub fn recompose(
             check_cancel(cancel)?;
             report(
                 0.8 * n as f32 / selected.len() as f32,
-                "Composing original pixels",
+                if scaled {
+                    "Composing scale-corrected frames"
+                } else {
+                    "Composing original pixels"
+                },
             );
             if rgb.dimensions() != native {
                 bail!("Video dimensions change within this scene");
             }
-            let p = native_positions[n];
-            composer.push(&rgb, ((p.x - min.x) as u32, (p.y - min.y) as u32), cancel)?;
+            for (plane, ((composer, (x, width, min, _)), (_, _, positions))) in
+                composers.iter_mut().zip(&planes).zip(&tracks).enumerate()
+            {
+                let p = positions[n];
+                let offset = ((p.x - min.x) as u32, (p.y - min.y) as u32);
+                let transformed;
+                let frame = if recipe.split.is_some() {
+                    transformed = imageops::crop_imm(&rgb, *x, 0, *width, native.1).to_image();
+                    &transformed
+                } else if scaled && frame_sizes[n] != native {
+                    let (width, height) = frame_sizes[n];
+                    transformed = zoom::resize(&rgb, width, height, cancel)?;
+                    &transformed
+                } else {
+                    &rgb
+                };
+                composer.push(frame, offset, cancel)?;
+                if retain_layers {
+                    let origin = if recipe.split.is_some() {
+                        (*x as i32, p.y - top)
+                    } else {
+                        (offset.0 as i32, offset.1 as i32)
+                    };
+                    layers.push(psd::Source::new(
+                        frame,
+                        plane,
+                        n,
+                        origin,
+                        offset,
+                        selected[n].time,
+                    ));
+                }
+            }
             Ok(())
         },
     )?;
-    let canvas = composer.finish();
+    for layer in &mut layers {
+        layer.make_mask(composers[layer.plane].owners().unwrap(), cancel)?;
+    }
+    let mut canvases = composers.into_iter().map(compose::Composer::finish);
+    let canvas = if recipe.split.is_some() {
+        let mut output = RgbaImage::new(native.0, (bottom - top) as u32);
+        for (plane, (x, width, min, _)) in canvases.zip(planes) {
+            let source_y = (top - min.y) as usize;
+            let bytes_per_row = width as usize * 4;
+            let stride = native.0 as usize * 4;
+            for row in 0..output.height() as usize {
+                if row % 32 == 0 {
+                    check_cancel(cancel)?;
+                }
+                let start = row * stride + x as usize * 4;
+                let source = (source_y + row) * bytes_per_row;
+                output.as_mut()[start..start + bytes_per_row]
+                    .copy_from_slice(&plane.as_raw()[source..source + bytes_per_row]);
+            }
+        }
+        output
+    } else {
+        canvases.next().unwrap()
+    };
+    Ok((canvas, layers))
+}
+
+pub fn save_psd(
+    ffmpeg: &std::path::Path,
+    id: u64,
+    recipe: &Recipe,
+    included: &[bool],
+    destination: &std::path::Path,
+    cancel: &AtomicBool,
+    report: impl Fn(f32, &'static str),
+) -> Result<()> {
+    let selected = selected_frames(recipe, included)?;
+    let (canvas, layers) = compose_frames(ffmpeg, recipe, &selected, true, cancel, &report)?;
+    report(0.85, "Writing Photoshop layers");
+    let bytes = psd::encode(canvas, layers, recipe.aspect, cancel)?;
+    crate::export::save_image_data(&bytes, destination, &recipe.input, id, cancel)
+}
+
+pub fn recompose(
+    ffmpeg: &std::path::Path,
+    id: u64,
+    recipe: Arc<Recipe>,
+    included: Vec<bool>,
+    cancel: &AtomicBool,
+    report: impl Fn(f32, &'static str),
+) -> Result<Output> {
+    let started = Instant::now();
+    check_cancel(cancel)?;
+    let selected = selected_frames(&recipe, &included)?;
+    let native_positions: Vec<_> = selected.iter().map(|f| f.position).collect();
+    let output_range = (selected[0].time, selected[selected.len() - 1].time);
+    let (mut dx, mut dy) = native_positions.last().unwrap().delta(native_positions[0]);
+    let native = recipe.native;
+    let experimental = recipe.method == Method::LayeredMotion;
+    let scaled = experimental || recipe.method == Method::ShiftAndScale;
+    let frame_sizes: Vec<_> = selected
+        .iter()
+        .map(|frame| zoom::frame_size(native, frame.scale))
+        .collect();
+    if scaled {
+        let first = frame_sizes[0];
+        let last = frame_sizes.last().unwrap();
+        dx += (last.0 as i32 - first.0 as i32) / 2;
+        dy += (last.1 as i32 - first.1 as i32) / 2;
+    }
+    let aspect = recipe.aspect;
+    let (canvas, _) = compose_frames(ffmpeg, &recipe, &selected, false, cancel, &report)?;
+    let dimensions = canvas.dimensions();
     check_cancel(cancel)?;
     report(0.85, "Preparing PNG preview");
     let preview = imageops::resize(
@@ -663,7 +954,9 @@ pub fn recompose(
     ));
     png::save(&canvas, &artifact.0, aspect, cancel).context("Could not write stitch preview")?;
     check_cancel(cancel)?;
-    let direction = if dx.abs() > dy.abs() * 3 {
+    let direction = if scaled && dx.abs().max(dy.abs()) < native.0.min(native.1) as i32 / 50 {
+        "Zoom"
+    } else if dx.abs() > dy.abs() * 3 {
         if dx > 0 { "Right" } else { "Left" }
     } else if dy.abs() > dx.abs() * 3 {
         if dy > 0 { "Down" } else { "Up" }
@@ -698,7 +991,15 @@ pub fn recompose(
         } else {
             String::new()
         },
-        "Local animation, baked-in subtitles, and parallax may remain. Inspect the preview before saving."
+        if recipe.split.is_some() {
+            "Two vertical layers were aligned separately and cropped to their shared height. Inspect the divider and any animation before saving."
+        } else if experimental {
+            "Experimental layered motion aligns the prioritized artwork. Other layers can show visible seams, and edges may be transparent. Inspect the preview before saving."
+        } else if scaled {
+            "Scale correction resamples frames. Inspect the preview for moving layers, seams and transparent edges."
+        } else {
+            "Local animation, baked-in subtitles, and parallax may remain. Inspect the preview before saving."
+        }
     );
     report(1.0, "Ready to preview");
     Ok(Output {
@@ -710,6 +1011,7 @@ pub fn recompose(
         direction,
         confidence: recipe.confidence,
         warning,
+        method: recipe.method,
         omitted_frames: omitted,
         search_limited: truncated,
         range: output_range,

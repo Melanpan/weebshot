@@ -3,7 +3,7 @@
 pub mod ffmpeg;
 pub mod size;
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -397,6 +397,11 @@ pub enum JobEvent {
 }
 
 enum Work {
+    SavePsd {
+        recipe: Arc<crate::stitch::Recipe>,
+        included: Vec<bool>,
+        destination: PathBuf,
+    },
     Clip(ClipJob),
     Stitch(crate::stitch::Job),
     Recompose {
@@ -432,6 +437,26 @@ impl Runner {
                     });
                     ctx.request_repaint();
                 };
+                if let Work::SavePsd {
+                    recipe,
+                    included,
+                    destination,
+                } = &sub.job
+                {
+                    let result = crate::stitch::save_psd(
+                        &tools.ffmpeg,
+                        sub.id,
+                        recipe,
+                        included,
+                        destination,
+                        &sub.cancel,
+                        |f, s| report(f, Some(f), s),
+                    )
+                    .map_err(|e| format!("{e:#}"));
+                    let _ = ev_tx.send(JobEvent::Finished { id: sub.id, result });
+                    ctx.request_repaint();
+                    continue;
+                }
                 let stitch_result = match &sub.job {
                     Work::Stitch(job) => Some(crate::stitch::run(
                         &tools.ffmpeg,
@@ -448,7 +473,7 @@ impl Runner {
                         &sub.cancel,
                         |f, s| report(f, Some(f), s),
                     )),
-                    Work::Clip(_) => None,
+                    Work::Clip(_) | Work::SavePsd { .. } => None,
                 };
                 if let Some(result) = stitch_result {
                     let result = result.map_err(|e| format!("{e:#}"));
@@ -484,6 +509,25 @@ impl Runner {
             }
         });
         Self { tx, events }
+    }
+
+    pub fn submit_psd(
+        &self,
+        id: u64,
+        recipe: Arc<crate::stitch::Recipe>,
+        included: Vec<bool>,
+        destination: PathBuf,
+        cancel: Arc<AtomicBool>,
+    ) {
+        let _ = self.tx.send(Submission {
+            id,
+            job: Work::SavePsd {
+                recipe,
+                included,
+                destination,
+            },
+            cancel,
+        });
     }
 
     pub fn submit_recompose(
@@ -705,6 +749,30 @@ pub fn save_image_copy(
     source_video: &Path,
     id: u64,
 ) -> Result<(), String> {
+    let save = || -> Result<()> {
+        let input = std::fs::File::open(encoded)?;
+        save_image(input, destination, source_video, id, None)
+    };
+    save().map_err(|e| format!("Could not save image: {e:#}"))
+}
+
+pub fn save_image_data(
+    data: &[u8],
+    destination: &Path,
+    source_video: &Path,
+    id: u64,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    save_image(data, destination, source_video, id, Some(cancel))
+}
+
+fn save_image(
+    mut input: impl Read,
+    destination: &Path,
+    source_video: &Path,
+    id: u64,
+    cancel: Option<&AtomicBool>,
+) -> Result<()> {
     let same = destination == source_video
         || destination
             .canonicalize()
@@ -712,8 +780,15 @@ pub fn save_image_copy(
             .zip(source_video.canonicalize().ok())
             .is_some_and(|(a, b)| a == b);
     if same {
-        return Err("Choose a PNG destination different from the source video".into());
+        bail!("Choose an image destination different from the source video");
     }
+    let check_cancel = || {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            bail!("cancelled");
+        }
+        Ok(())
+    };
+    check_cancel()?;
     let scratch = destination.with_extension(format!("weebshot-{}-{id}.tmp", std::process::id()));
     struct Scratch(PathBuf);
     impl Drop for Scratch {
@@ -721,26 +796,30 @@ pub fn save_image_copy(
             let _ = std::fs::remove_file(&self.0);
         }
     }
-    // Create before installing the guard: a pre-existing scratch file belongs to
-    // another operation and must not be removed after a create_new failure.
-    let result = (|| -> Result<()> {
-        let mut output = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&scratch)?;
-        let _cleanup = Scratch(scratch.clone());
-        let mut input = std::fs::File::open(encoded)?;
-        std::io::copy(&mut input, &mut output)?;
-        output.sync_all()?;
-        drop(output);
-        #[cfg(windows)]
-        if destination.exists() {
-            std::fs::remove_file(destination)?;
+    // A pre-existing scratch file belongs to another operation.
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&scratch)?;
+    let _cleanup = Scratch(scratch.clone());
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        check_cancel()?;
+        let len = input.read(&mut buffer)?;
+        if len == 0 {
+            break;
         }
-        std::fs::rename(&scratch, destination)?;
-        Ok(())
-    })();
-    result.map_err(|e| format!("Could not save image: {e:#}"))
+        output.write_all(&buffer[..len])?;
+    }
+    output.sync_all()?;
+    drop(output);
+    check_cancel()?;
+    #[cfg(windows)]
+    if destination.exists() {
+        std::fs::remove_file(destination)?;
+    }
+    std::fs::rename(&scratch, destination)?;
+    Ok(())
 }
 
 #[cfg(test)]

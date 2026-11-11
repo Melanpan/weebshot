@@ -35,7 +35,9 @@ impl Rect {
 pub(super) struct Composer {
     canvas: RgbaImage,
     covered: Option<Rect>,
-    previous: Option<(u32, u32)>,
+    previous: Option<Rect>,
+    owners: Option<image::GrayImage>,
+    source: u8,
 }
 impl Composer {
     pub fn new(size: (u32, u32)) -> Self {
@@ -43,8 +45,21 @@ impl Composer {
             canvas: RgbaImage::new(size.0, size.1),
             covered: None,
             previous: None,
+            owners: None,
+            source: 0,
         }
     }
+    pub fn track_sources(&mut self) {
+        self.owners = Some(image::GrayImage::new(
+            self.canvas.width(),
+            self.canvas.height(),
+        ));
+    }
+
+    pub fn owners(&self) -> Option<&image::GrayImage> {
+        self.owners.as_ref()
+    }
+
     pub fn finish(self) -> RgbaImage {
         self.canvas
     }
@@ -56,6 +71,9 @@ impl Composer {
         cancel: &AtomicBool,
     ) -> Result<()> {
         check_cancel(cancel)?;
+        if self.owners.is_some() {
+            self.source += 1;
+        }
         let Some(x1) = offset.0.checked_add(frame.width()) else {
             bail!("Invalid frame position");
         };
@@ -73,8 +91,10 @@ impl Composer {
         };
         let movement = self
             .previous
-            .map(|p| (offset.0 as i64 - p.0 as i64, offset.1 as i64 - p.1 as i64));
-        if movement == Some((0, 0)) {
+            .map(|p| (offset.0 as i64 - p.x0 as i64, offset.1 as i64 - p.y0 as i64));
+        if self.previous.is_some_and(|p| {
+            p.x0 == rect.x0 && p.y0 == rect.y0 && p.x1 == rect.x1 && p.y1 == rect.y1
+        }) {
             return Ok(());
         }
         let vertical = movement.is_none_or(|(dx, dy)| dy.abs() >= dx.abs());
@@ -111,6 +131,9 @@ impl Composer {
                     false
                 };
                 if replace {
+                    if let Some(owners) = &mut self.owners {
+                        owners.put_pixel(cx, cy, image::Luma([self.source]));
+                    }
                     let p = frame.get_pixel(x, y);
                     self.canvas
                         .put_pixel(cx, cy, image::Rgba([p[0], p[1], p[2], 255]));
@@ -118,7 +141,7 @@ impl Composer {
             }
         }
         self.covered = Some(self.covered.map_or(rect, |r| r.union(rect)));
-        self.previous = Some(offset);
+        self.previous = Some(rect);
         Ok(())
     }
 

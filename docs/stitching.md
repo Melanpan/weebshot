@@ -32,12 +32,21 @@ The preview header shows the output dimensions, selected frame count, camera
 direction, alignment confidence, and actual time range. Expand the amber warning
 row to read why frames were omitted or the search limit was reached. **Details**
 contains the full reconstruction notes and preview information. It starts fitted to
-the window. Previews larger than 2,048 pixels are reduced for display; exports retain
-all native pixels. Drag to pan, scroll or use the zoom buttons above the image, and choose **Fit**
+the window. Previews larger than 2,048 pixels are reduced for display. PNG exports
+use the reconstruction's full resolution. Drag to pan, scroll or use the zoom buttons above the image, and choose **Fit**
 to reset. The zoom multiplier is relative to the fitted view.
 **Save PNG…** in the bottom-right corner opens a destination dialog using your screenshot output directory
 (or the video's directory). Saving copies the exact native-resolution PNG behind
 the preview; the video remains untouched.
+
+**Save PSD…** writes a Photoshop document with the aligned frames on separate
+pixel layers and the overlap seams on editable layer masks. The two-vertical-layer
+method exports each side of a frame on its own layer. Layer names show source
+timestamps. Open the PSD, select a mask thumbnail, and paint white to reveal
+more of that frame or black to hide part of it. The PSD also includes a merged
+image that matches the PNG. Apply any frame selection edits before saving.
+If the PSD exceeds the export memory budget, include fewer frames or shorten
+the range.
 
 **Retry** repeats the last stitch using the latest stitch settings. If the same
 video is still open and both In/Out marks are set, it uses those current marks.
@@ -82,9 +91,32 @@ In **Options → Export → Auto Stitch**, adjust:
 
 | Setting | Default |
 | --- | --- |
-| Analysis rate | 8 frames/second, increased automatically for difficult motion |
+| Stitch method | Automatic |
+| Frame spacing | 8% of a frame in camera travel |
+| Analysis rate | 8 frames/second, adaptive in Automatic and Single translation |
 | Search in each direction | 15 seconds |
 | Allow short pauses | Enabled (up to 0.75 seconds) |
+
+**Automatic** tries single translation first and can fall back to two vertical
+layers if ordinary alignment fails. **Single translation** uses one shift per
+frame for artwork that moves together. **Two vertical layers** aligns the left
+and right sides independently across the whole search window or marked range.
+Use a tight In/Out range and, if the split is visible in the artwork, set the
+divider as a percentage from the left edge. Leave the divider automatic to try
+the midpoint and thirds. **Shift and scale** is for artwork that pans and zooms
+together. Use In/Out around a single shot. This method scales frames into the
+first frame's coordinate system, so the exported image includes resampled pixels.
+**Layered motion (experimental)** is for vertical pans where overlapping artwork
+moves at different speeds. It requires an In/Out range. Choose **Foreground** to
+favor faster-moving artwork such as characters, or **Background** to favor the
+slower motion. Adjust **Frame spacing** to change the time between selected
+frames, then choose **Retry**. The preview can contain visible seams in
+other layers and transparent edges. Use **Save PSD…** to adjust the joins by hand.
+The preview's **Details** menu shows the method used.
+
+Lower **Frame spacing** to include more source frames and increase overlap
+between successive selections. Raise it to process fewer frames when there is
+ample overlap. Choose **Retry** after changing these settings.
 
 The initial version always uses high quality native-resolution composition and
 PNG output. Subtitle tracks and preview crops are excluded. Subtitles already
@@ -94,9 +126,14 @@ encoded into the video cannot be removed.
 
 Use static artwork with a horizontal or vertical pan, or a small diagonal
 translation. The matcher tolerates limited foreground animation and compression
-noise, but cannot reconstruct zooms, rotation, perspective changes, or substantial
-parallax. Confidence measures translation agreement; it is not a guarantee that
-all animated features are clean. Inspect faces, line art, and overlaps before saving.
+noise. If ordinary alignment fails, Weebshot can try aligning two side-by-side
+regions that pan vertically at different speeds. The preview warns when this is
+used and shows the height covered by both regions. Inspect the join before saving.
+Use In/Out marks around the pan if the automatic search window includes other shots.
+
+Shift and scale supports a uniform zoom on one plane. Rotation, perspective
+changes, and automatic separation of overlapping silhouettes remain unsupported.
+Confidence measures agreement with the selected motion model. Inspect faces, line art, and overlaps before saving.
 Pixels in overlaps come from individual source frames, without repeated averaging.
 Overlap boundaries favour matching areas and avoid connected moving regions where
 possible, reducing cuts through changing poses.
@@ -116,8 +153,8 @@ a cut is rejected rather than silently shortened.
 Limits: a selection of 60 seconds, 1,000 analysis samples, 96 selected source frames,
 16 megapixels per source frame, and a 32 megapixel output with at most 16,384 pixels
 on either edge. A decoder invocation times out after 120 seconds. Shorter ranges
-reduce processing time and memory use. Analysis is downscaled; composition preserves
-source pixel detail and FFmpeg's automatic orientation. Non-square source pixels
+reduce processing time and memory use. Analysis is downscaled. Composition uses source pixels for translation-only
+methods and resamples frames for Shift and scale. FFmpeg applies source orientation. Non-square source pixels
 are displayed at their source aspect ratio and saved with PNG pixel aspect metadata;
 some image viewers ignore this metadata. HDR colour fidelity is not supported in
 this initial version.

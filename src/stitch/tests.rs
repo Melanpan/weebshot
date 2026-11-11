@@ -1013,3 +1013,457 @@ fn pose_change_is_not_hidden_by_flat_background() {
     assert!(a.edge_agreement(&b, m) < Options::default().min_edge_agreement);
     assert_eq!(a.edge_agreement(&a, m), 1.0);
 }
+
+/// The reported clip combines layered motion with apparent scale changes.
+#[test]
+#[ignore = "requires WEEBSHOT_LAYERED_PAN_SAMPLE"]
+fn reported_overlapping_layers_are_rejected() {
+    let input = PathBuf::from(
+        std::env::var_os("WEEBSHOT_LAYERED_PAN_SAMPLE").expect("set WEEBSHOT_LAYERED_PAN_SAMPLE"),
+    );
+    for (id, range, method, message) in [
+        (
+            910030,
+            None,
+            Method::Automatic,
+            "two stable vertical layers",
+        ),
+        (
+            910031,
+            Some((0.0, 7.967)),
+            Method::Automatic,
+            "two stable vertical layers",
+        ),
+        (
+            910039,
+            Some((0.0, 7.967)),
+            Method::ShiftAndScale,
+            "single plane",
+        ),
+    ] {
+        let job = Job {
+            input: input.clone(),
+            playhead: 4.0,
+            duration: 7.967,
+            range,
+            source_fps: 24000.0 / 1001.0,
+            options: Options {
+                method,
+                ..Default::default()
+            },
+        };
+        let result = run(
+            &crate::export::find_tool("ffmpeg"),
+            id,
+            &job,
+            &AtomicBool::new(false),
+            |_, _| {},
+        );
+        let Err(error) = result else {
+            panic!("stitch accepted overlapping layers with scale changes for {range:?}");
+        };
+        assert!(error.to_string().contains(message), "{range:?}: {error:#}");
+    }
+}
+
+#[test]
+fn two_vertical_layers_round_trip() {
+    let ffmpeg = crate::export::find_tool("ffmpeg");
+    if std::process::Command::new(&ffmpeg)
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("weebshot-stitch-layers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let left = artwork(160, 430);
+    let right = imageops::flip_horizontal(&artwork(160, 430));
+    let count = 16;
+    for n in 0..count {
+        let frame = RgbImage::from_fn(320, 180, |x, y| {
+            if x < 160 {
+                *left.get_pixel(x, y + n * 4)
+            } else {
+                *right.get_pixel(x - 160, y + n * 10)
+            }
+        });
+        frame.save(dir.join(format!("{n:03}.png"))).unwrap();
+    }
+    let video = dir.join("layers.mkv");
+    assert!(
+        std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-framerate",
+                "8",
+                "-i"
+            ])
+            .arg(dir.join("%03d.png"))
+            .args(["-c:v", "ffv1", "-threads", "1"])
+            .arg(&video)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let cancel = AtomicBool::new(false);
+    for (id, range, method, layer_divider_percent) in [
+        (910032, Some((0.0, 2.0)), Method::Automatic, None),
+        (910033, None, Method::Automatic, None),
+        (
+            910034,
+            Some((0.0, 2.0)),
+            Method::TwoVerticalLayers,
+            Some(50),
+        ),
+    ] {
+        let output = run(
+            &ffmpeg,
+            id,
+            &Job {
+                input: video.clone(),
+                playhead: 1.0,
+                duration: 2.0,
+                range,
+                source_fps: 8.0,
+                options: Options {
+                    method,
+                    layer_divider_percent,
+                    ..Default::default()
+                },
+            },
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(output.method, Method::TwoVerticalLayers);
+        assert_eq!(output.recipe.split, Some(160));
+        assert_eq!(output.dimensions, (320, 240));
+        assert!(output.warning.contains("Two vertical layers"));
+        assert_eq!(
+            image::open(&output.artifact.0).unwrap().to_rgba8(),
+            output.preview
+        );
+        for (x, y, p) in output.preview.enumerate_pixels() {
+            let expected = if x < 160 {
+                left.get_pixel(x, y)
+            } else {
+                right.get_pixel(x - 160, y)
+            };
+            assert_eq!(&p.0[..3], &expected.0);
+            assert_eq!(p[3], 255);
+        }
+        if method == Method::TwoVerticalLayers {
+            let path = dir.join("two-vertical-layers.psd");
+            save_psd(
+                &ffmpeg,
+                910036,
+                &output.recipe,
+                &output.included,
+                &path,
+                &cancel,
+                |_, _| {},
+            )
+            .unwrap();
+            assert_psd_matches_stitch(&path, &output.preview, output.frames * 2);
+        }
+        let mut included = output.included.clone();
+        *included.last_mut().unwrap() = false;
+        let edited = recompose(
+            &ffmpeg,
+            id + 10,
+            output.recipe,
+            included,
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(edited.dimensions.1 < output.dimensions.1);
+    }
+
+    for (method, layer_divider_percent) in [
+        (Method::Translation, None),
+        (Method::TwoVerticalLayers, Some(20)),
+    ] {
+        let job = Job {
+            input: video.clone(),
+            playhead: 1.0,
+            duration: 2.0,
+            range: Some((0.0, 2.0)),
+            source_fps: 8.0,
+            options: Options {
+                method,
+                layer_divider_percent,
+                ..Default::default()
+            },
+        };
+        assert!(
+            run(&ffmpeg, 910035, &job, &cancel, |_, _| {}).is_err(),
+            "{method:?}"
+        );
+    }
+}
+
+#[test]
+fn legacy_stitch_settings_default_to_automatic_method() {
+    let options: Options = serde_json::from_str(r#"{"sampling_fps": 12}"#).unwrap();
+    assert_eq!(options.method, Method::Automatic);
+    assert_eq!(options.sampling_fps, 12.0);
+    assert_eq!(options.layer_divider_percent, None);
+}
+
+#[test]
+fn shift_and_scale_video_round_trip() {
+    let ffmpeg = crate::export::find_tool("ffmpeg");
+    if std::process::Command::new(&ffmpeg)
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("weebshot-stitch-zoom-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let source = imageops::blur(&artwork(430, 400), 1.5);
+    for n in 0..16 {
+        let width = 320 + 4 * n;
+        let height = 180 + 2 * n;
+        let crop = imageops::crop_imm(&source, 45 - 2 * n, 20 + 4 * n, width, height).to_image();
+        let frame = imageops::resize(&crop, 320, 180, FilterType::CatmullRom);
+        frame.save(dir.join(format!("{n:03}.png"))).unwrap();
+    }
+    let video = dir.join("zoom.mkv");
+    assert!(
+        std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-framerate",
+                "8",
+                "-i"
+            ])
+            .arg(dir.join("%03d.png"))
+            .args(["-c:v", "ffv1", "-threads", "1"])
+            .arg(&video)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let cancel = AtomicBool::new(false);
+    let output = run(
+        &ffmpeg,
+        910041,
+        &Job {
+            input: video,
+            playhead: 1.0,
+            duration: 2.0,
+            range: Some((0.0, 2.0)),
+            source_fps: 8.0,
+            options: Options {
+                method: Method::ShiftAndScale,
+                ..Default::default()
+            },
+        },
+        &cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    assert_eq!(output.method, Method::ShiftAndScale);
+    assert!(
+        output.dimensions.0.abs_diff(380) <= 3,
+        "{:?}",
+        output.dimensions
+    );
+    assert!(
+        output.dimensions.1.abs_diff(270) <= 3,
+        "{:?}",
+        output.dimensions
+    );
+    let last = output.recipe.frames.last().unwrap();
+    assert!((last.scale - 1.18).abs() < 0.02, "{}", last.scale);
+    assert!(last.position.x.abs_diff(-30) <= 2, "{:?}", last.position);
+    assert!(last.position.y.abs_diff(60) <= 2, "{:?}", last.position);
+    let reconstructed = image::open(&output.artifact.0).unwrap().to_rgba8();
+    assert_eq!(reconstructed, output.preview);
+    let mut total = 0u64;
+    let mut coverage = 0u64;
+    for (x, y, pixel) in reconstructed.enumerate_pixels() {
+        if pixel[3] == 255 {
+            let expected = source.get_pixel(x + 15, y + 20);
+            total += u64::from(pixel[0].abs_diff(expected[0]));
+            coverage += 1;
+        }
+    }
+    assert!(coverage > 85_000, "{coverage} covered pixels");
+    assert!(
+        total as f64 / (coverage as f64) < 12.0,
+        "mean error {}",
+        total as f64 / coverage as f64
+    );
+    let psd_path = dir.join("zoom.psd");
+    save_psd(
+        &ffmpeg,
+        910043,
+        &output.recipe,
+        &output.included,
+        &psd_path,
+        &cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    assert_psd_matches_stitch(&psd_path, &reconstructed, output.frames);
+    let cancelled = AtomicBool::new(true);
+    let absent = dir.join("cancelled.psd");
+    assert!(
+        save_psd(
+            &ffmpeg,
+            910044,
+            &output.recipe,
+            &output.included,
+            &absent,
+            &cancelled,
+            |_, _| {}
+        )
+        .is_err()
+    );
+    assert!(!absent.exists());
+    let mut included = output.included.clone();
+    *included.last_mut().unwrap() = false;
+    let edited = recompose(&ffmpeg, 910042, output.recipe, included, &cancel, |_, _| {}).unwrap();
+    assert!(edited.dimensions.1 < output.dimensions.1);
+}
+
+fn assert_psd_matches_stitch(path: &std::path::Path, expected: &RgbaImage, count: usize) {
+    let psd = ag_psd::read_psd(
+        &std::fs::read(path).unwrap(),
+        &ag_psd::psd::ReadOptions {
+            use_image_data: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let composite = psd.image_data.unwrap();
+    assert_eq!((composite.width, composite.height), expected.dimensions());
+    assert_eq!(composite.data, *expected.as_raw());
+    let layers = psd.children.unwrap();
+    assert_eq!(layers.len(), count);
+    let mut rebuilt = RgbaImage::new(expected.width(), expected.height());
+    let mut hidden = false;
+    for layer in layers {
+        let image = layer.image_data.unwrap();
+        let mask = layer.additional_info.mask.unwrap().image_data.unwrap();
+        assert_eq!((image.width, image.height), (mask.width, mask.height));
+        let x0 = layer.left.unwrap() as i32;
+        let y0 = layer.top.unwrap() as i32;
+        for (i, (color, mask)) in image
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(mask.data.as_chunks::<4>().0)
+            .enumerate()
+        {
+            assert_eq!(color[3], 255);
+            if mask[0] == 0 {
+                hidden = true;
+                continue;
+            }
+            assert_eq!(mask[0], 255);
+            let x = x0 + (i as u32 % image.width) as i32;
+            let y = y0 + (i as u32 / image.width) as i32;
+            if x >= 0 && y >= 0 && x < expected.width() as i32 && y < expected.height() as i32 {
+                assert_eq!(rebuilt.get_pixel(x as u32, y as u32)[3], 0);
+                rebuilt.put_pixel(x as u32, y as u32, image::Rgba(*color));
+            }
+        }
+    }
+    assert!(
+        hidden,
+        "expected some source pixels to remain behind editable masks"
+    );
+    assert_eq!(rebuilt, *expected);
+}
+
+#[test]
+#[ignore = "requires WEEBSHOT_LAYERED_PAN_SAMPLE"]
+fn reported_overlapping_layers_experimental_preview() {
+    let input = PathBuf::from(
+        std::env::var_os("WEEBSHOT_LAYERED_PAN_SAMPLE").expect("set WEEBSHOT_LAYERED_PAN_SAMPLE"),
+    );
+    let job = Job {
+        input,
+        playhead: 4.0,
+        duration: 7.967,
+        range: Some((0.0, 7.967)),
+        source_fps: 24000.0 / 1001.0,
+        options: Options {
+            method: Method::LayeredMotion,
+            ..Default::default()
+        },
+    };
+    let output = run(
+        &crate::export::find_tool("ffmpeg"),
+        910045,
+        &job,
+        &AtomicBool::new(false),
+        |_, _| {},
+    )
+    .unwrap();
+    assert_eq!(output.method, Method::LayeredMotion);
+    assert!(output.frames >= 4);
+    assert!(output.dimensions.1 > 1900, "{:?}", output.dimensions);
+    assert!(output.warning.contains("visible seams"));
+    eprintln!(
+        "{:?}, {} frames, {:.2}s",
+        output.dimensions, output.frames, output.elapsed
+    );
+    if let Some(path) = std::env::var_os("WEEBSHOT_LAYERED_PREVIEW") {
+        std::fs::copy(&output.artifact.0, path).unwrap();
+    }
+    if let Some(path) = std::env::var_os("WEEBSHOT_LAYERED_PSD") {
+        let path = PathBuf::from(path);
+        save_psd(
+            &crate::export::find_tool("ffmpeg"),
+            910046,
+            &output.recipe,
+            &output.included,
+            &path,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        let png = image::open(&output.artifact.0).unwrap().to_rgba8();
+        assert_psd_matches_stitch(&path, &png, output.frames);
+    }
+    let mut background = job;
+    background.options.prefer_background = true;
+    let output_background = run(
+        &crate::export::find_tool("ffmpeg"),
+        910047,
+        &background,
+        &AtomicBool::new(false),
+        |_, _| {},
+    )
+    .unwrap();
+    assert!(output_background.dimensions.1 < output.dimensions.1);
+}
