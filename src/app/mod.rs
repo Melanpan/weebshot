@@ -15,13 +15,15 @@ mod widgets;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText};
 
 use crate::export::ffmpeg::StillJob;
-use crate::export::{self, ClipFormat, ClipJob, Crop, JobEvent, Runner, SubMode, SubSource, Tools};
+use crate::export::{
+    self, ClipFormat, ClipJob, Crop, ExportJob, JobEvent, Runner, SubMode, SubSource, Tools,
+};
 use crate::fonts::icon;
 use crate::keymap::{Action, Binding};
 use crate::log;
@@ -32,7 +34,7 @@ use crate::subs::{CueLoader, CueSource};
 use crate::theme::Palette;
 use crate::thumbs::Thumbs;
 use crate::tracks::{TrackKind, relative_sub_index};
-use crate::util::{expand_template, frame_at, time_tag, unique_path, unique_path_avoiding};
+use crate::util::{expand_template, fmt_time, frame_at, time_tag, unique_path_avoiding};
 use crate::waveform::Waveform;
 
 pub use shots::Script;
@@ -66,12 +68,16 @@ pub enum JobState {
 pub struct JobView {
     id: u64,
     name: String,
-    job: ClipJob,
+    output: Option<PathBuf>,
+    details: Option<String>,
+    retry: Option<ExportJob>,
     progress: f32,
     state: JobState,
     cancel: Arc<AtomicBool>,
     started: Option<Instant>,
     elapsed: Option<Duration>,
+    /// Output file size, read once when the job finished.
+    size: Option<u64>,
 }
 
 #[derive(Default)]
@@ -79,6 +85,10 @@ struct LogView {
     min_level: Option<log::Level>,
     search: String,
     follow: bool,
+    /// Filtered lines, rebuilt only when the log or the filter changes
+    /// (`cache_key`: log sequence, lowercased search, level).
+    cache: Vec<log::Line>,
+    cache_key: Option<(usize, String, Option<log::Level>)>,
 }
 
 /// A GPU encoder and whether its test encode worked.
@@ -340,11 +350,19 @@ impl App {
     }
 
     fn close(&mut self) {
+        self.stop_shuttle();
+        self.play_until = None;
         self.player.close();
         self.in_point = None;
         self.out_point = None;
-        self.looping = false;
+        self.set_looping(false);
         self.cues = None;
+        // Background decoders and caches belong to the closed file; drop them now
+        // instead of keeping their textures and ffmpeg processes around until the
+        // next file is opened.
+        self.thumbs = None;
+        self.waveform = None;
+        self.timeline = timeline::TimelineState::default();
     }
 
     fn out_dir(&self) -> Option<PathBuf> {
@@ -436,13 +454,7 @@ impl App {
         if let Some(c) = &mut self.cues {
             c.delete(idx);
         }
-        // Indices after the deleted one shift down; a selection on the deleted line itself
-        // no longer refers to anything.
-        self.timeline.selected_cue = match self.timeline.selected_cue {
-            Some(i) if i == idx => None,
-            Some(i) if i > idx => Some(i - 1),
-            other => other,
-        };
+        self.timeline.cue_removed(idx);
         self.sync_preview_subs();
     }
 
@@ -524,7 +536,7 @@ impl App {
             (None, None) => return,
         }
         // The track changed: any previous edits/selection no longer apply.
-        self.timeline.selected_cue = None;
+        self.timeline.cues_replaced();
         self.sync_preview_subs();
     }
 
@@ -565,6 +577,17 @@ impl App {
             SubMode::Burned => &[(true, "")],
             SubMode::Both => &[(true, "_subbed"), (false, "_raw")],
         };
+        if self.settings.shot_anime4k.enabled {
+            for &(burn, suffix) in variants {
+                let destination =
+                    self.available_output(&dir, &format!("{base}{suffix}"), format.ext());
+                if let Err(error) = self.queue_upscaled_frame(burn, Some(destination)) {
+                    return self.error(error);
+                }
+            }
+            self.info("Anime4K screenshot queued");
+            return;
+        }
         if self.settings.shot_crop
             && let Some(crop) = self.view_crop()
         {
@@ -572,7 +595,7 @@ impl App {
         }
         let mut saved = Vec::new();
         for &(subs, suffix) in variants {
-            let path = unique_path(&dir, &format!("{base}{suffix}"), format.ext());
+            let path = self.available_output(&dir, &format!("{base}{suffix}"), format.ext());
             if let Err(e) = self.player.screenshot(&path, format, subs) {
                 return self.error(format!("{e:#}"));
             }
@@ -581,6 +604,46 @@ impl App {
         }
         self.play_sound(Sound::Screenshot);
         self.info(format!("Saved {}", saved.join(", ")));
+    }
+
+    fn queue_upscaled_frame(&mut self, burn: bool, output: Option<PathBuf>) -> Result<(), String> {
+        use export::anime4k::{Frame, Job};
+
+        let input = self.player.file.clone().ok_or("Open a video first")?;
+        let frame = if self.settings.shot_crop
+            && let Some(crop) = self.view_crop()
+        {
+            if self.tool_status.ffmpeg.is_err() {
+                return Err("Cropped screenshots need ffmpeg".into());
+            }
+            Frame::Extract(StillJob {
+                input: input.clone(),
+                time: self.player.time,
+                fps: self.player.fps,
+                crop: Some(crop),
+                subs: if burn { self.sub_source()? } else { None },
+                output: PathBuf::new(),
+            })
+        } else {
+            let scratch = export::Scratch::new(&std::env::temp_dir(), self.next_job_id)
+                .map_err(|error| error.to_string())?;
+            let path = scratch.path.join("capture.png");
+            self.player
+                .screenshot(&path, crate::settings::ShotFormat::Png, burn)
+                .map_err(|error| format!("{error:#}"))?;
+            Frame::Captured(
+                std::fs::read(path)
+                    .map_err(|error| error.to_string())?
+                    .into(),
+            )
+        };
+        self.submit(ExportJob::Image(Job {
+            input,
+            frame,
+            output,
+            options: self.settings.shot_anime4k,
+        }));
+        Ok(())
     }
 
     /// Screenshot of just the zoomed-in part of the frame, rendered by ffmpeg (mpv's own
@@ -608,7 +671,7 @@ impl App {
                 fps: self.player.fps,
                 crop: Some(crop),
                 subs: if burn { subs.clone() } else { None },
-                output: unique_path(
+                output: self.available_output(
                     dir,
                     &format!("{base}{suffix}"),
                     self.settings.shot_format.ext(),
@@ -666,21 +729,16 @@ impl App {
         // Edited cues (delete/retime/edit text) for the current track — burn those in
         // instead of the original file, by writing them to a scratch .ass that reuses
         // the original style definitions. Only kicks in once actually edited, so an
-        // untouched track keeps its original styling exactly. Not cleaned up immediately:
-        // a queued export job may still be reading it.
+        // untouched track keeps its original styling exactly.
         if let Some(loader) = &self.cues
             && loader.dirty
             && !loader.loading()
             && !loader.cues.is_empty()
             && self.cue_source().is_some_and(|w| w == loader.source)
         {
-            let path = std::env::temp_dir().join(format!(
-                "weebshot-{}-{}.subs.ass",
-                std::process::id(),
-                self.next_job_id
-            ));
-            loader.write_to(&path).map_err(|e| e.to_string())?;
-            return Ok(Some(SubSource::Text { path, stream: 0 }));
+            let mut data = Vec::new();
+            loader.write_ass(&mut data).map_err(|e| e.to_string())?;
+            return Ok(Some(SubSource::Edited(data.into())));
         }
         Ok(Some(match &track.external {
             Some(path) => SubSource::Text {
@@ -716,6 +774,7 @@ impl App {
             .then(|| self.player.current(TrackKind::Audio)?.ff_index)
             .flatten();
         let base = ClipJob {
+            anime4k: s.clip_anime4k,
             input,
             start,
             end,
@@ -766,20 +825,14 @@ impl App {
         let stem = expand_template(&self.settings.clip_template, &self.template_vars(&[]));
         let mut copy_jobs = Vec::new();
         for (subs, suffix) in variants {
-            let output =
-                unique_path_avoiding(&dir, &format!("{stem}{suffix}"), format.ext(), |path| {
-                    self.jobs.iter().any(|entry| {
-                        matches!(entry.state, JobState::Queued | JobState::Running { .. })
-                            && entry.job.output == path
-                    })
-                });
+            let output = self.available_output(&dir, &format!("{stem}{suffix}"), format.ext());
             let job = ClipJob {
                 subs,
                 output,
                 ..base.clone()
             };
             let copy_path = copy.then(|| job.output.clone());
-            let id = self.submit(job);
+            let id = self.submit(ExportJob::Clip(job));
             if let Some(path) = copy_path {
                 copy_jobs.push((id, path));
             }
@@ -811,27 +864,47 @@ impl App {
         }
     }
 
-    fn submit(&mut self, job: ClipJob) -> u64 {
+    fn available_output(&self, dir: &Path, stem: &str, extension: &str) -> PathBuf {
+        unique_path_avoiding(dir, stem, extension, |path| {
+            self.jobs.iter().any(|entry| {
+                matches!(entry.state, JobState::Queued | JobState::Running { .. })
+                    && entry.output.as_deref() == Some(path)
+            })
+        })
+    }
+
+    fn submit(&mut self, job: ExportJob) -> u64 {
         let id = self.next_job_id;
         self.next_job_id += 1;
         let cancel = Arc::new(AtomicBool::new(false));
-        let name = job
-            .output
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let output = job.output().map(Path::to_path_buf);
+        let name = output.as_deref().and_then(Path::file_name).map_or_else(
+            || "Copy Frame".into(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let details = match &job {
+            ExportJob::Clip(clip) => Some(format!(
+                "{} · {} → {}",
+                clip.format.short(),
+                fmt_time(clip.start),
+                fmt_time(clip.end),
+            )),
+            ExportJob::Image(_) => None,
+        };
         log::info("export", format!("queued {name}"));
         self.runner.submit(id, job.clone(), cancel.clone());
         self.jobs.push(JobView {
             id,
             name,
-            job,
+            output,
+            details,
+            retry: Some(job),
             progress: 0.0,
             state: JobState::Queued,
             cancel,
             started: None,
             elapsed: None,
+            size: None,
         });
         id
     }
@@ -853,7 +926,7 @@ impl App {
                 JobEvent::Stitched { .. } => continue,
                 JobEvent::Progress { id, .. } | JobEvent::Finished { id, .. } => *id,
             };
-            let Some(job) = self.jobs.iter_mut().find(|j| j.id == id) else {
+            let Some(index) = self.jobs.iter().position(|job| job.id == id) else {
                 continue;
             };
             match ev {
@@ -864,6 +937,7 @@ impl App {
                     stage,
                     ..
                 } => {
+                    let job = &mut self.jobs[index];
                     job.started.get_or_insert_with(Instant::now);
                     job.progress = overall;
                     job.state = JobState::Running {
@@ -872,11 +946,30 @@ impl App {
                     };
                 }
                 JobEvent::Finished { result, .. } => {
+                    let result = result.and_then(|image| {
+                        if let Some(image) = image {
+                            if self.jobs[index].cancel.load(Ordering::Relaxed) {
+                                return Err("cancelled".into());
+                            }
+                            self.set_clipboard_image(image)
+                                .map_err(|error| format!("Could not copy image: {error}"))?;
+                        }
+                        Ok(())
+                    });
                     self.clipboard.clip_finished(id, result.is_ok());
+                    let job = &mut self.jobs[index];
                     job.elapsed = job.started.map(|s| s.elapsed());
                     finished = true;
                     job.state = match result {
-                        Ok(()) => JobState::Done,
+                        Ok(()) => {
+                            job.retry = None;
+                            job.size = job
+                                .output
+                                .as_deref()
+                                .and_then(|path| std::fs::metadata(path).ok())
+                                .map(|metadata| metadata.len());
+                            JobState::Done
+                        }
                         Err(e) => {
                             failed |= e != "cancelled";
                             JobState::Failed(e)

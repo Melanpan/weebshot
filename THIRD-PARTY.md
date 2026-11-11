@@ -8,7 +8,11 @@ Release packages also contain or use the following.
 | Component | License | Source |
 | --- | --- | --- |
 | **libmpv** (mpv) | GPL-2.0-or-later (these builds include GPL parts) | <https://mpv.io> · Windows builds: <https://github.com/shinchiro/mpv-winbuild-cmake> |
-| **FFmpeg** | GPL-3.0 (Windows: gyan.dev essentials build; macOS: static build by Martin Riedl) | <https://ffmpeg.org> · <https://www.gyan.dev/ffmpeg/builds/> · <https://ffmpeg.martin-riedl.de> |
+| **FFmpeg** | GPL-3.0 (Windows: gyan.dev shared build; macOS CLI: static build by Martin Riedl) | <https://ffmpeg.org> · <https://www.gyan.dev/ffmpeg/builds/> · <https://ffmpeg.martin-riedl.de> |
+| **Anime4KCPP Core v3.2.0** | MIT | <https://github.com/TianZerL/Anime4KCPP/tree/v3.2.0> |
+| **stb**, **ruapu**, **half** | MIT | <https://github.com/nothings/stb> · <https://github.com/nihui/ruapu> · <https://half.sourceforge.net> |
+| **OpenCL headers and Windows ICD loader** | Apache-2.0 | <https://github.com/KhronosGroup/OpenCL-SDK> |
+| **Linux OpenCL ICD loader (ocl-icd)** | BSD-2-Clause | <https://github.com/OCL-dev/ocl-icd> |
 | **gifsicle** | GPL-2.0 | <https://www.lcdf.org/gifsicle/> · Windows builds: <https://eternallybored.org/misc/gifsicle/> |
 
 The Linux AppImage and macOS app also contain the shared libraries these depend on, as shipped by

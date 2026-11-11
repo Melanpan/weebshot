@@ -7,6 +7,26 @@
 3. Press [E](key:ExportClip). The export appears in the **Queue** tab, and a chime plays when the
    queue is done (see *Options → General → Sounds*).
 
+## Anime4K
+
+Enable **Anime4K (2×)** in the Clip section for MP4, MKV, WebM, GIF, or animated WebP. Weebshot
+applies your crop and subtitle settings, doubles the width and height, then applies the format's
+height limit. A 960×540 crop becomes 1920×1080 with no cap, or 1280×720 with a 720p cap.
+
+- **Model and preset** — ACNet and ARNet each offer Fast, Balanced, and Slow. These select
+  f8b4, f8b8, and f8b18 for ACNet, and f8b8, f8b16, and f8b32 for ARNet.
+  The default is ACNet Balanced.
+- **Variant** — Neutral is the default. Choose Denoise for mild noise reduction,
+  Line restoration for stronger line reconstruction, or Line restoration + denoise for both.
+- **Device** — Auto tries a compatible OpenCL GPU and reports CPU fallback in the Queue and
+  Logs tabs. GPU mode requires a driver exposing a compatible OpenCL GPU. CPU works without a
+  GPU driver. This choice is independent of the clip's hardware video encoder.
+
+Weebshot stores two lossless FFV1 videos in the system temporary directory until the export
+finishes. Space depends on the clip length, crop, frame rate, and how well the frames compress.
+For scale, the two intermediates for a 10-second 1080p clip at 24 fps would occupy about 15 GB
+before FFV1 compression. A lower final height cap still uses the full 2× intermediate.
+
 ## Copy exported files to clipboard
 
 Click **Copy** beside Export Clip or press [Shift+E](key:CopyClip). Weebshot exports using

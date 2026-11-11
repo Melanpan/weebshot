@@ -40,6 +40,7 @@ fn subtitle_chain(
     start: f64,
     subs: Option<&SubSource>,
     crop: Option<Crop>,
+    preserve_offset: bool,
 ) -> (String, Vec<String>) {
     let mut filters: Vec<String> = Vec::new();
     let mut input = "[0:v:0]".to_string();
@@ -53,12 +54,19 @@ fn subtitle_chain(
                 "subtitles=filename={}:si={stream}",
                 escape_filter_path(path)
             ));
-            filters.push("setpts=PTS-STARTPTS".into());
+            filters.push(if preserve_offset {
+                format!("setpts=PTS-{}/TB", secs(start))
+            } else {
+                "setpts=PTS-STARTPTS".into()
+            });
         }
         Some(SubSource::Bitmap { ff_index }) => {
             input = format!("[0:v:0][0:{ff_index}]");
             filters.push("overlay=format=auto".into());
             filters.extend(crop.map(Crop::filter));
+        }
+        Some(SubSource::Edited(_)) => {
+            unreachable!("materialize edited subtitles before building filters")
         }
         None => filters.extend(crop.map(Crop::filter)),
     }
@@ -83,7 +91,7 @@ impl StillJob {
         // Seek a quarter frame early: ffmpeg keeps the first frame at or after the seek
         // point, which is then exactly the frame that was on screen.
         let start = (self.time - 0.25 / self.fps.max(1.0)).max(0.0);
-        let (input, chain) = subtitle_chain(start, self.subs.as_ref(), self.crop);
+        let (input, chain) = subtitle_chain(start, self.subs.as_ref(), self.crop, false);
         let graph = if chain.is_empty() {
             format!("{input}null[v]")
         } else {
@@ -112,6 +120,9 @@ impl StillJob {
         match ext.as_str() {
             "jpg" | "jpeg" => args.extend(strings(["-q:v", "2"])),
             "webp" => args.extend(strings(["-c:v", "libwebp", "-quality", "92"])),
+            // 10-bit sources would otherwise become 16-bit PNGs; mpv's own screenshots
+            // are 8-bit (`screenshot-high-bit-depth=no`), so match that.
+            "png" => args.extend(strings(["-pix_fmt", "rgb24"])),
             _ => {}
         }
         args.push(self.output.to_string_lossy().into_owned());
@@ -163,10 +174,22 @@ impl ClipJob {
     /// Input pad(s) and the filter chain shared by every output format:
     /// subtitles, scaling, frame rate / pixel format.
     fn video_chain(&self) -> (String, Vec<String>) {
-        let (input, mut filters) = subtitle_chain(self.start, self.subs.as_ref(), self.crop);
+        let (input, mut filters) = if self.anime4k.enabled {
+            ("[0:v:0]".into(), Vec::new())
+        } else {
+            subtitle_chain(self.start, self.subs.as_ref(), self.crop, false)
+        };
 
+        let height = if self.anime4k.enabled {
+            self.crop
+                .map(|crop| crop.height)
+                .or(self.src_height)
+                .map(|h| h.saturating_mul(2))
+        } else {
+            self.src_height
+        };
         if let Some(h) = self.max_height
-            && self.src_height.is_none_or(|src| h < src)
+            && height.is_none_or(|src| h < src)
         {
             filters.push(format!("scale=-2:{h}:flags=lanczos"));
         }
@@ -200,21 +223,63 @@ impl ClipJob {
                 "format=yuv420p".into()
             });
         }
-        if self.loop_count > 1 {
-            // `size` just needs to safely cover the whole (already `-ss`/`-t` trimmed)
-            // clip — ffmpeg stops capturing at EOF regardless, so there's no need to
-            // compute an exact frame count. Capped at the filter's own hard limit of
-            // 32767 frames (~22 min at 24fps), well past what this feature is for.
+        if self.loop_count > 1 && self.format.is_animation() {
+            // The `loop` filter keeps up to `size` decoded frames in memory. That's fine
+            // here: animations are scaled down and run at a low fixed rate, and `size`
+            // is bounded by the clip's actual frame count (the filter's hard limit is
+            // 32767). Video formats loop at the container level instead, see
+            // `loop_step`, since a full-resolution clip would not fit in RAM.
+            let frames = (self.duration() * f64::from(self.fps)).ceil() as u32 + 2;
             filters.push(format!(
-                "loop=loop={}:size=32767:start=0",
-                self.loop_count - 1
+                "loop=loop={}:size={}:start=0",
+                self.loop_count - 1,
+                frames.clamp(1, 32767)
             ));
         }
         (input, filters)
     }
 
-    fn input_args(&self) -> Vec<String> {
-        let mut args: Vec<String> = strings([
+    /// Repeat an already encoded clip by concatenating it with itself: `-stream_loop`
+    /// re-reads the file and `-c copy` keeps the packets, so no frame is held in memory
+    /// and nothing is re-encoded.
+    fn loop_step(&self, single: &Path) -> Step {
+        let mut args = Self::progress_args();
+        args.extend([
+            "-stream_loop".into(),
+            (self.loop_count - 1).to_string(),
+            "-i".into(),
+            single.to_string_lossy().into_owned(),
+        ]);
+        args.extend(strings([
+            "-c",
+            "copy",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+        ]));
+        if self.format == ClipFormat::Mp4 {
+            args.extend(strings(["-movflags", "+faststart"]));
+        }
+        args.push(self.output.to_string_lossy().into_owned());
+        Step {
+            tool: Tool::Ffmpeg,
+            args,
+            label: "Repeating clip",
+            weight: 0.1,
+            // `out_time` runs to loop_count × duration; not comparable to the clip length.
+            reports_progress: false,
+        }
+    }
+
+    fn source_args(&self) -> Vec<String> {
+        let mut args = Self::progress_args();
+        args.extend(self.trimmed_input_args());
+        args
+    }
+
+    fn progress_args() -> Vec<String> {
+        strings([
             "-hide_banner",
             "-nostdin",
             "-y",
@@ -223,15 +288,84 @@ impl ClipJob {
             "-progress",
             "pipe:1",
             "-nostats",
-            "-ss",
         ])
-        .collect();
-        args.push(secs(self.start));
-        args.push("-t".into());
-        args.push(secs(self.duration()));
-        args.push("-i".into());
-        args.push(self.input.to_string_lossy().into_owned());
+        .collect()
+    }
+
+    fn trimmed_input_args(&self) -> Vec<String> {
+        vec![
+            "-ss".into(),
+            secs(self.start),
+            "-t".into(),
+            secs(self.duration()),
+            "-i".into(),
+            self.input.to_string_lossy().into_owned(),
+        ]
+    }
+
+    /// `with_audio = false` for steps that produce no audio (two-pass analysis): with
+    /// Anime4K the audio comes from a second input, which those steps needn't open.
+    fn input_args(&self, tmp: &TempFiles, with_audio: bool) -> Vec<String> {
+        if !self.anime4k.enabled {
+            return self.source_args();
+        }
+        let mut args = Self::progress_args();
+        // The runner supplies the prepared video's first PTS. FFmpeg subtracts
+        // the Matroska start time on input, while audio is relative to the trim.
+        args.extend(strings(["-itsoffset", "0", "-i"]));
+        args.push(
+            tmp.passlog
+                .with_extension("upscaled.mkv")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        if with_audio && self.has_audio() {
+            args.extend(self.trimmed_input_args());
+        }
         args
+    }
+
+    fn upscale_steps(&self, tmp: &TempFiles) -> Vec<Step> {
+        if !self.anime4k.enabled {
+            return Vec::new();
+        }
+        let prepared = tmp.passlog.with_extension("prepared.mkv");
+        let upscaled = tmp.passlog.with_extension("upscaled.mkv");
+        let (input, mut filters) = subtitle_chain(self.start, self.subs.as_ref(), self.crop, true);
+        filters.push("format=yuv444p16le".into());
+        let mut args = self.source_args();
+        args.extend([
+            "-filter_complex".into(),
+            format!("{input}{}[v]", filters.join(",")),
+        ]);
+        args.extend(strings([
+            "-map",
+            "[v]",
+            "-an",
+            "-c:v",
+            "ffv1",
+            "-level",
+            "3",
+            "-fps_mode",
+            "passthrough",
+            "-enc_time_base",
+            "1:1000",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+        ]));
+        args.push(prepared.to_string_lossy().into_owned());
+        vec![
+            Step {
+                tool: Tool::Ffmpeg,
+                args,
+                label: "Preparing Anime4K input",
+                weight: 1.0,
+                reports_progress: true,
+            },
+            self.anime4k.step("video", &prepared, &upscaled),
+        ]
     }
 
     /// The GPU encoder in use, if any (only for H.264 formats).
@@ -360,9 +494,9 @@ impl ClipJob {
             ClipFormat::Mp4 => "aac",
             _ => "libopus",
         };
-        let mut args = vec![
+        let args = vec![
             "-map".into(),
-            format!("0:{idx}"),
+            format!("{}:{idx}", usize::from(self.anime4k.enabled)),
             "-c:a".into(),
             codec.into(),
             "-b:a".into(),
@@ -370,22 +504,21 @@ impl ClipJob {
             "-ac".into(),
             "2".into(),
         ];
-        if self.loop_count > 1 {
-            // Same idea as the video `loop` filter above: a size far larger than any
-            // clip's sample count, so ffmpeg just captures everything up to EOF and
-            // loops that (audio has no 32767-ish cap, unlike the video filter).
-            args.push("-af".into());
-            args.push(format!(
-                "aloop=loop={}:size=2000000000:start=0",
-                self.loop_count - 1
-            ));
-        }
         args
+    }
+
+    fn upscaled_video_timing(&self) -> impl Iterator<Item = String> {
+        (self.anime4k.enabled && !self.format.is_animation())
+            .then_some(["-fps_mode", "vfr", "-enc_time_base", "1:1000"])
+            .into_iter()
+            .flatten()
+            .map(String::from)
     }
 
     fn output_args(&self) -> Vec<String> {
         let mut args: Vec<String> =
             strings(["-map_metadata", "-1", "-map_chapters", "-1", "-sn", "-dn"]).collect();
+        args.extend(self.upscaled_video_timing());
         if self.format == ClipFormat::Mp4 {
             args.extend(strings(["-movflags", "+faststart"]));
         }
@@ -469,9 +602,26 @@ impl ClipJob {
             }]);
         }
         if self.format == ClipFormat::Gif {
-            return Ok(self.gif_steps(tmp));
+            let mut steps = self.upscale_steps(tmp);
+            steps.extend(self.gif_steps(tmp));
+            return Ok(steps);
+        }
+        if self.loop_count > 1 && !self.format.is_animation() {
+            // Encode once into the staging dir, then repeat the file by stream copy.
+            let single = tmp
+                .passlog
+                .with_extension(format!("single.{}", self.format.ext()));
+            let once = Self {
+                loop_count: 1,
+                output: single.clone(),
+                ..self.clone()
+            };
+            let mut steps = once.build_steps(tmp)?;
+            steps.push(self.loop_step(&single));
+            return Ok(steps);
         }
 
+        let mut steps = self.upscale_steps(tmp);
         let (input, chain) = self.video_chain();
         let graph = format!("{input}{}[v]", chain.join(","));
         let with_graph = |mut args: Vec<String>| {
@@ -487,38 +637,40 @@ impl ClipJob {
         if let Some(hw) = self.hw() {
             // One pass on the GPU; aim 8% low since there's no analysis pass.
             let kbps = self.target_video_kbps()?.map(|k| k * 92 / 100);
-            let mut args = with_graph(self.input_args());
+            let mut args = with_graph(self.input_args(tmp, true));
             args.extend(self.hw_codec_args(hw, kbps));
             args.extend(self.audio_args());
             args.extend(self.output_args());
-            return Ok(vec![Step {
+            steps.push(Step {
                 tool: Tool::Ffmpeg,
                 args,
                 label: "Encoding (GPU)",
                 weight: 1.0,
                 reports_progress: true,
-            }]);
+            });
+            return Ok(steps);
         }
 
         let Some(kbps) = self.target_video_kbps()? else {
-            let mut args = with_graph(self.input_args());
+            let mut args = with_graph(self.input_args(tmp, true));
             args.extend(self.video_codec_args());
             args.extend(self.audio_args());
             args.extend(self.output_args());
-            return Ok(vec![Step {
+            steps.push(Step {
                 tool: Tool::Ffmpeg,
                 args,
                 label: "Encoding",
                 weight: 1.0,
                 reports_progress: true,
-            }]);
+            });
+            return Ok(steps);
         };
 
         let passlog = tmp.passlog.to_string_lossy().into_owned();
         let bitrate = format!("{kbps}k");
-        let mut steps = Vec::new();
         for pass in ["1", "2"] {
-            let mut args = with_graph(self.input_args());
+            // Pass 1 writes no audio, so don't open the audio input for it.
+            let mut args = with_graph(self.input_args(tmp, pass == "2"));
             args.extend(self.video_codec_args());
             args.extend(strings([
                 "-b:v",
@@ -529,6 +681,7 @@ impl ClipJob {
                 &passlog,
             ]));
             if pass == "1" {
+                args.extend(self.upscaled_video_timing());
                 args.extend(strings(["-an", "-f", "null", null_output()]));
             } else {
                 args.extend(self.audio_args());
@@ -557,7 +710,7 @@ impl ClipJob {
         let palette = tmp.palette.to_string_lossy().into_owned();
         let a = self.anim;
 
-        let mut palette_args = self.input_args();
+        let mut palette_args = self.input_args(tmp, false);
         palette_args.extend([
             "-filter_complex".into(),
             format!(
@@ -573,7 +726,7 @@ impl ClipJob {
             palette.clone(),
         ]);
 
-        let mut encode_args = self.input_args();
+        let mut encode_args = self.input_args(tmp, false);
         encode_args.extend([
             "-i".into(),
             palette,
@@ -647,6 +800,7 @@ mod tests {
 
     fn job(format: ClipFormat) -> ClipJob {
         ClipJob {
+            anime4k: Default::default(),
             input: PathBuf::from(r"C:\anime\[Group] Show - 01.mkv"),
             start: 83.5,
             end: 93.5,
@@ -845,20 +999,70 @@ mod tests {
     }
 
     #[test]
-    fn loop_count_appends_loop_filters() {
-        let mut j = job(ClipFormat::Webm);
+    fn animation_loop_uses_bounded_loop_filter() {
+        let mut j = job(ClipFormat::Gif);
         assert!(!j.video_chain().1.iter().any(|f| f.starts_with("loop=")));
-        assert!(!j.audio_args().iter().any(|a| a.starts_with("aloop=")));
 
         j.loop_count = 3;
+        // 10 s at 15 fps = 150 frames, plus a little slack; never the 32767 maximum.
         assert!(
             j.video_chain()
                 .1
-                .contains(&"loop=loop=2:size=32767:start=0".to_string())
+                .contains(&"loop=loop=2:size=152:start=0".to_string())
         );
-        let audio = j.audio_args();
-        let af_pos = audio.iter().position(|a| a == "-af").unwrap();
-        assert_eq!(audio[af_pos + 1], "aloop=loop=2:size=2000000000:start=0");
+        assert!(!j.audio_args().iter().any(|a| a == "-af"));
+    }
+
+    #[test]
+    fn video_loop_repeats_encoded_file_by_stream_copy() {
+        let mut j = job(ClipFormat::Mp4);
+        j.loop_count = 3;
+        j.target_mb = Some(4.0);
+        let steps = j.build_steps(&tmp()).unwrap();
+        assert_eq!(steps.len(), 3, "two encode passes, then the repeat step");
+        let encode = joined(&steps[1]);
+        assert!(!encode.contains("loop="));
+        assert!(encode.ends_with("passlog.single.mp4"));
+        let repeat = joined(&steps[2]);
+        assert!(repeat.contains("-stream_loop 2 -i passlog.single.mp4 -c copy"));
+        assert!(repeat.contains("+faststart"));
+        assert!(repeat.ends_with(r"C:\out\clip.webm"));
+        assert!(!steps[2].reports_progress);
+    }
+
+    #[test]
+    fn first_pass_skips_anime4k_audio_input() {
+        let mut j = job(ClipFormat::Mkv);
+        j.anime4k.enabled = true;
+        j.target_mb = Some(4.0);
+        let steps = j.build_steps(&tmp()).unwrap();
+        let labels: Vec<_> = steps.iter().map(|s| s.label).collect();
+        assert_eq!(
+            labels,
+            [
+                "Preparing Anime4K input",
+                "Upscaling (Anime4K)",
+                "Analyzing (pass 1/2)",
+                "Encoding (pass 2/2)"
+            ]
+        );
+        let inputs = |step: &Step| step.args.iter().filter(|a| *a == "-i").count();
+        assert_eq!(inputs(&steps[2]), 1);
+        assert_eq!(inputs(&steps[3]), 2);
+        assert!(joined(&steps[3]).contains("-map 1:1 -c:a libopus"));
+    }
+
+    #[test]
+    fn png_stills_are_eight_bit() {
+        let s = StillJob {
+            input: PathBuf::from("ep.mkv"),
+            time: 1.0,
+            fps: 24.0,
+            crop: None,
+            subs: None,
+            output: PathBuf::from("shot.png"),
+        };
+        assert!(s.args().join(" ").ends_with("-pix_fmt rgb24 shot.png"));
     }
 
     #[test]

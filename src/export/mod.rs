@@ -1,5 +1,6 @@
 //! Clip export: job description and a background worker running ffmpeg.
 
+pub mod anime4k;
 pub mod ffmpeg;
 pub mod size;
 
@@ -298,10 +299,24 @@ pub enum SubSource {
     Text { path: PathBuf, stream: usize },
     /// PGS/VobSub overlaid from the input file's stream `ff_index`.
     Bitmap { ff_index: i64 },
+    /// Snapshot of edited cues, materialized in the job's scratch directory.
+    Edited(Arc<[u8]>),
+}
+
+impl SubSource {
+    fn prepare(subs: &mut Option<Self>, scratch: &Scratch) -> Result<()> {
+        if let Some(Self::Edited(data)) = subs {
+            let path = scratch.path.join("edited.ass");
+            std::fs::write(&path, data)?;
+            *subs = Some(Self::Text { path, stream: 0 });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct ClipJob {
+    pub anime4k: anime4k::Options,
     pub input: PathBuf,
     pub start: f64,
     pub end: f64,
@@ -335,6 +350,7 @@ pub struct ClipJob {
 pub enum Tool {
     Ffmpeg,
     Gifsicle,
+    Anime4k,
 }
 
 /// One external process run of a job.
@@ -355,26 +371,47 @@ pub struct TempFiles {
     pub palette: PathBuf,
 }
 
-impl TempFiles {
-    fn new(id: u64) -> Self {
-        let base = std::env::temp_dir().join(format!("weebshot-{}-{id}", std::process::id()));
-        Self {
-            palette: base.with_extension("palette.png"),
-            passlog: base,
-        }
-    }
+pub struct Scratch {
+    pub path: PathBuf,
+}
 
-    fn cleanup(&self) {
-        // x264 writes <log>-0.log(.mbtree), libvpx writes <log>-0.log.
-        for suffix in [
-            "-0.log",
-            "-0.log.mbtree",
-            "-0.log.temp",
-            "-0.log.mbtree.temp",
-        ] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", self.passlog.display()));
+impl Scratch {
+    pub fn new(parent: &Path, id: u64) -> Result<Self> {
+        use std::sync::atomic::AtomicU64;
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!(".weebshot-{}-{id}-{serial}", std::process::id()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
         }
-        let _ = std::fs::remove_file(&self.palette);
+        builder
+            .create(&path)
+            .with_context(|| format!("Could not create {}", path.display()))?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ExportJob {
+    Clip(ClipJob),
+    Image(anime4k::Job),
+}
+
+impl ExportJob {
+    pub fn output(&self) -> Option<&Path> {
+        match self {
+            Self::Clip(job) => Some(&job.output),
+            Self::Image(job) => job.output.as_deref(),
+        }
     }
 }
 
@@ -398,7 +435,7 @@ pub enum JobEvent {
     },
     Finished {
         id: u64,
-        result: Result<(), String>,
+        result: Result<Option<image::RgbaImage>, String>,
     },
 }
 
@@ -408,7 +445,7 @@ enum Work {
         included: Vec<bool>,
         destination: PathBuf,
     },
-    Clip(ClipJob),
+    Export(ExportJob),
     Stitch(crate::stitch::Job),
     Recompose {
         recipe: Arc<crate::stitch::Recipe>,
@@ -458,6 +495,7 @@ impl Runner {
                         &sub.cancel,
                         |f, s| report(f, Some(f), s),
                     )
+                    .map(|()| None)
                     .map_err(|e| format!("{e:#}"));
                     let _ = ev_tx.send(JobEvent::Finished { id: sub.id, result });
                     ctx.request_repaint();
@@ -479,7 +517,7 @@ impl Runner {
                         &sub.cancel,
                         |f, s| report(f, Some(f), s),
                     )),
-                    Work::Clip(_) | Work::SavePsd { .. } => None,
+                    Work::Export(_) | Work::SavePsd { .. } => None,
                 };
                 if let Some(result) = stitch_result {
                     let result = result.map_err(|e| format!("{e:#}"));
@@ -498,18 +536,33 @@ impl Runner {
                     ctx.request_repaint();
                     continue;
                 }
-                let Work::Clip(job) = &sub.job else {
+                let Work::Export(job) = &sub.job else {
                     unreachable!()
                 };
                 let result = if sub.cancel.load(Ordering::Relaxed) {
-                    Err("cancelled".to_string())
+                    Err(anyhow::anyhow!("cancelled"))
                 } else {
-                    run_job(&tools, sub.id, job, &sub.cancel, report).map_err(|e| format!("{e:#}"))
+                    match job {
+                        ExportJob::Clip(clip) => {
+                            run_job(&tools, sub.id, clip, &sub.cancel, report).map(|()| None)
+                        }
+                        ExportJob::Image(image) => image.run(&tools, sub.id, &sub.cancel, report),
+                    }
                 };
-                match &result {
-                    Ok(()) => log::info("export", format!("finished {}", job.output.display())),
-                    Err(e) => log::error("export", format!("{}: {e}", job.output.display())),
-                }
+                let result = match result {
+                    Ok(image) => {
+                        if let Some(output) = job.output() {
+                            log::info("export", format!("finished {}", output.display()));
+                        }
+                        report(1.0, Some(1.0), "Done");
+                        Ok(image)
+                    }
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        log::error("export", &message);
+                        Err(message)
+                    }
+                };
                 let _ = ev_tx.send(JobEvent::Finished { id: sub.id, result });
                 ctx.request_repaint();
             }
@@ -558,10 +611,10 @@ impl Runner {
         });
     }
 
-    pub fn submit(&self, id: u64, job: ClipJob, cancel: Arc<AtomicBool>) {
+    pub fn submit(&self, id: u64, job: ExportJob, cancel: Arc<AtomicBool>) {
         let _ = self.tx.send(Submission {
             id,
-            job: Work::Clip(job),
+            job: Work::Export(job),
             cancel,
         });
     }
@@ -585,31 +638,56 @@ fn run_job(
     cancel: &AtomicBool,
     report: impl Fn(f32, Option<f32>, &'static str),
 ) -> Result<()> {
-    let tmp = TempFiles::new(id);
-    let result = job
-        .build_steps(&tmp)
-        .and_then(|steps| run_steps(tools, job, &steps, cancel, report));
-    tmp.cleanup();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&job.output);
+    // Small scratch files (edited subtitles) go to the temp dir; the staging dir next
+    // to the output holds the encode itself and every large intermediate: pass logs,
+    // the GIF palette and above all the Anime4K FFV1 videos, which run to gigabytes
+    // and would otherwise fill a RAM-backed /tmp.
+    let scratch = Scratch::new(&std::env::temp_dir(), id)?;
+    let parent = job
+        .output
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let staging = Scratch::new(parent, id)?;
+    let tmp = TempFiles {
+        passlog: staging.path.join("pass"),
+        palette: staging.path.join("palette.png"),
+    };
+    let mut staged = job.clone();
+    SubSource::prepare(&mut staged.subs, &scratch)?;
+    staged.output = staging.path.join(format!("clip.{}", job.format.ext()));
+    let steps = staged.build_steps(&tmp)?;
+    let duration = job.duration().max(0.001);
+    run_steps(tools, duration, &steps, cancel, report)?;
+    if cancel.load(Ordering::Relaxed) {
+        bail!("cancelled");
     }
-    result
+    if job.output.exists() {
+        bail!("Output already exists: {}", job.output.display());
+    }
+    std::fs::rename(&staged.output, &job.output)
+        .with_context(|| format!("Could not publish {}", job.output.display()))?;
+    Ok(())
 }
 
 fn run_steps(
     tools: &Tools,
-    job: &ClipJob,
+    duration: f64,
     steps: &[Step],
     cancel: &AtomicBool,
     report: impl Fn(f32, Option<f32>, &'static str),
 ) -> Result<()> {
-    let duration = job.duration().max(0.001);
     let total: f32 = steps.iter().map(|s| s.weight).sum();
     let mut done = 0.0f32;
+    let mut video_start = None;
 
     for step in steps {
+        if cancel.load(Ordering::Relaxed) {
+            bail!("cancelled");
+        }
         let program = match step.tool {
             Tool::Ffmpeg => tools.ffmpeg.clone(),
+            Tool::Anime4k => find_tool("weebshot-anime4k"),
             Tool::Gifsicle => match &tools.gifsicle {
                 Some(p) => p.clone(),
                 None => {
@@ -618,9 +696,17 @@ fn run_steps(
                 }
             },
         };
+        let mut args = step.args.clone();
+        if step.tool == Tool::Ffmpeg
+            && let Some(index) = args.iter().position(|arg| arg == "-itsoffset")
+        {
+            let start: i64 =
+                video_start.context("Anime4K did not report a video start timestamp")?;
+            args[index + 1] = format!("{:.6}", start as f64 / 1e6);
+        }
         log::info(
             "export",
-            format!("$ {}", log::format_command(&program, &step.args)),
+            format!("$ {}", log::format_command(&program, &args)),
         );
         report(
             done / total,
@@ -629,18 +715,26 @@ fn run_steps(
         );
 
         let mut cmd = Command::new(&program);
-        cmd.args(&step.args)
+        cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         hide_console(&mut cmd);
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("could not start {}", program.display()))?;
+        let mut child = cmd.spawn().with_context(|| {
+            if step.tool == Tool::Anime4k {
+                format!(
+                    "Could not start {}. Use a packaged build with the Anime4K helper installed",
+                    program.display()
+                )
+            } else {
+                format!("Could not start {}", program.display())
+            }
+        })?;
 
         let tool_name = match step.tool {
             Tool::Ffmpeg => "ffmpeg",
             Tool::Gifsicle => "gifsicle",
+            Tool::Anime4k => "Anime4K",
         };
         let stderr = child.stderr.take().unwrap();
         let stderr_reader = thread::spawn(move || {
@@ -654,22 +748,60 @@ fn run_steps(
             lines
         });
 
-        for line in BufReader::new(child.stdout.take().unwrap()).lines() {
+        let stdout = child.stdout.take().unwrap();
+        let (tx, rx) = unbounded();
+        let stdout_reader = thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut stage = step.label;
+        loop {
             if cancel.load(Ordering::Relaxed) {
                 let _ = child.kill();
                 break;
             }
-            let Ok(line) = line else { break };
+            let line = match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(line) => line,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    // A process may close stdout before it finishes.
+                    if child.try_wait()?.is_some() {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(50));
+                    continue;
+                }
+            };
+            if step.tool == Tool::Anime4k
+                && let Some(start) = line.strip_prefix("video_start_us=")
+            {
+                video_start = start.parse().ok();
+            }
+            if step.tool == Tool::Anime4k
+                && let Some(backend) = line.strip_prefix("backend=")
+            {
+                stage = match backend {
+                    "gpu" => "Upscaling (Anime4K GPU)",
+                    "cpu" if step.args[1] == "auto" => "Upscaling (Anime4K Auto → CPU)",
+                    _ => "Upscaling (Anime4K CPU)",
+                };
+                log::info("Anime4K", stage);
+                report(done / total, step.reports_progress.then_some(0.0), stage);
+            }
             if step.reports_progress
                 && let Some(us) = line.strip_prefix("out_time_us=")
                 && let Ok(us) = us.trim().parse::<f64>()
             {
                 let f = (us / 1e6 / duration).clamp(0.0, 1.0) as f32;
-                report((done + f * step.weight) / total, Some(f), step.label);
+                report((done + f * step.weight) / total, Some(f), stage);
             }
         }
 
         let status = child.wait()?;
+        let _ = stdout_reader.join();
         let stderr = stderr_reader.join().unwrap_or_default();
         if cancel.load(Ordering::Relaxed) {
             bail!("cancelled");
@@ -686,12 +818,19 @@ fn run_steps(
         }
         done += step.weight;
     }
-    report(1.0, Some(1.0), "Done");
     Ok(())
 }
 
 /// Render one still frame (a cropped screenshot) with ffmpeg.
 pub fn run_still(ffmpeg: &Path, job: &ffmpeg::StillJob) -> Result<(), String> {
+    let mut job = job.clone();
+    let _scratch = if matches!(job.subs, Some(SubSource::Edited(_))) {
+        let scratch = Scratch::new(&std::env::temp_dir(), 0).map_err(|error| error.to_string())?;
+        SubSource::prepare(&mut job.subs, &scratch).map_err(|error| error.to_string())?;
+        Some(scratch)
+    } else {
+        None
+    };
     let args = job.args();
     log::info(
         "export",
@@ -727,10 +866,30 @@ pub fn find_tool(name: &str) -> PathBuf {
     } else {
         name.to_string()
     };
-    std::env::current_exe()
-        .ok()
+    let executable = std::env::current_exe().ok();
+    if name == "weebshot-anime4k" {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        // Source launches can reuse the native build without copying it or changing PATH.
+        if executable
+            .as_ref()
+            .is_some_and(|exe| exe.starts_with(root.join("target")))
+        {
+            for directory in [
+                "target/anime4k",
+                "target/anime4k/Release",
+                "dist/anime4k/bin",
+                "dist/weebshot",
+            ] {
+                let candidate = root.join(directory).join(&file);
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    executable
         .and_then(|exe| exe.parent().map(|d| d.join(&file)))
-        .filter(|p| p.exists())
+        .filter(|p| p.is_file())
         .unwrap_or_else(|| PathBuf::from(file))
 }
 
@@ -836,7 +995,7 @@ mod tests {
         PathBuf::from(std::env::var("WEEBSHOT_SAMPLE").expect("set WEEBSHOT_SAMPLE"))
     }
 
-    fn tools() -> Tools {
+    pub(super) fn tools() -> Tools {
         let gifsicle = find_tool("gifsicle");
         Tools {
             ffmpeg: find_tool("ffmpeg"),
@@ -844,10 +1003,11 @@ mod tests {
         }
     }
 
-    fn job(input: &Path, format: ClipFormat, burn: bool, name: &str) -> ClipJob {
+    pub(super) fn job(input: &Path, format: ClipFormat, burn: bool, name: &str) -> ClipJob {
         let out_dir = input.parent().unwrap().join("out");
         std::fs::create_dir_all(&out_dir).unwrap();
         ClipJob {
+            anime4k: Default::default(),
             input: input.to_path_buf(),
             start: 20.5,
             end: 24.5,

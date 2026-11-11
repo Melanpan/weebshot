@@ -91,6 +91,8 @@ pub struct Player {
     seek_in_flight: Option<Instant>,
     /// Newest seek requested while one was in flight; older ones are dropped.
     pending_seek: Option<(f64, bool)>,
+    /// Last position delivered by mpv, including while a seek target is displayed.
+    reported_time: Option<f64>,
     /// (path, mpv track id) of the subtitle file loaded from edited cues, if showing one.
     edited_sub: Option<(PathBuf, i64)>,
     /// `sid` to restore once the edited-subtitle track is removed.
@@ -107,7 +109,17 @@ const OBSERVED: &[(&str, Format)] = &[
     ("width", Format::Int64),
     ("height", Format::Int64),
     ("track-list/count", Format::Int64),
+    ("hwdec-current", Format::String),
 ];
+
+// Keep screenshots CPU-readable without probing Vulkan Video. On NVIDIA,
+// vulkan-copy has hung inside av_hwframe_transfer_data during backward seeks.
+// mpv tries these in order and falls back to software if none is supported.
+const HWDEC_COPY: &str = "nvdec-copy,vaapi-copy,videotoolbox-copy,d3d11va-copy,dxva2-copy";
+
+fn hwdec_mode(enabled: bool) -> &'static str {
+    if enabled { HWDEC_COPY } else { "no" }
+}
 
 /// Give up waiting for a seek to finish after this long (e.g. seek past the end).
 const SEEK_TIMEOUT: Duration = Duration::from_millis(400);
@@ -127,7 +139,8 @@ impl Player {
             init.set_option("config", "no")?;
             init.set_option("terminal", "no")?;
             init.set_option("input-default-bindings", "no")?;
-            init.set_option("hwdec", if settings.hwdec { "auto-safe" } else { "no" })?;
+            // Screenshots need CPU-readable frames, including with CUDA/NVDEC.
+            init.set_option("hwdec", hwdec_mode(settings.hwdec))?;
             init.set_option("keep-open", "yes")?;
             init.set_option("idle", "yes")?;
             init.set_option("hr-seek", "yes")?;
@@ -175,10 +188,14 @@ impl Player {
         let ctx = cc.egui_ctx.clone();
         render.set_update_callback(move || ctx.request_repaint());
 
-        Ok(Self {
+        Ok(Self::with_handles(mpv, Some(render)))
+    }
+
+    fn with_handles(mpv: &'static Mpv, render: Option<RenderContext<'static>>) -> Self {
+        Self {
             mpv,
             gl: Arc::new(GlCell(Mutex::new(GlState {
-                render: Some(render),
+                render,
                 target: None,
             }))),
             file: None,
@@ -195,9 +212,10 @@ impl Player {
             chapters: Vec::new(),
             seek_in_flight: None,
             pending_seek: None,
+            reported_time: None,
             edited_sub: None,
             sid_before_edit: None,
-        })
+        }
     }
 
     /// Run an mpv command without waiting for mpv's core.
@@ -226,6 +244,16 @@ impl Player {
         self.chapters.clear();
         self.seek_in_flight = None;
         self.pending_seek = None;
+        self.reported_time = None;
+        // Everything below describes the previous file. mpv reports the new values
+        // as property changes / FILE_LOADED; until then nothing must build on the
+        // old ones (e.g. thumbnails sized for the old aspect ratio and frame rate).
+        self.time = 0.0;
+        self.duration = 0.0;
+        self.video_width = None;
+        self.video_height = None;
+        self.video_codec = None;
+        self.fps = 24000.0 / 1001.0;
         // Track ids are per-file; whatever we'd loaded no longer applies.
         self.edited_sub = None;
         self.sid_before_edit = None;
@@ -254,6 +282,9 @@ impl Player {
         self.chapters.clear();
         self.time = 0.0;
         self.duration = 0.0;
+        self.seek_in_flight = None;
+        self.pending_seek = None;
+        self.reported_time = None;
         self.aid = None;
         self.sid = None;
         self.video_height = None;
@@ -279,9 +310,7 @@ impl Player {
                     let name = unsafe { CStr::from_ptr(prop.name) }.to_str().unwrap_or("");
                     let value = unsafe { PropValue::read(prop) };
                     match (name, value) {
-                        ("time-pos", PropValue::Double(v)) if self.seek_in_flight.is_none() => {
-                            self.time = v
-                        }
+                        ("time-pos", PropValue::Double(v)) => self.reported_time = Some(v),
                         ("duration", PropValue::Double(v)) => self.duration = v,
                         ("pause", PropValue::Flag(b)) => self.paused = b,
                         ("aid", PropValue::Str(s)) => self.aid = s.parse().ok(),
@@ -300,15 +329,17 @@ impl Player {
                         ("width", PropValue::Int64(v)) => self.video_width = Some(v as u32),
                         ("height", PropValue::Int64(v)) => self.video_height = Some(v as u32),
                         ("track-list/count", _) => reload_tracks = true,
+                        ("hwdec-current", PropValue::Str(s)) => {
+                            log::info("mpv", format!("hardware decoder: {s}"));
+                        }
                         _ => {}
                     }
                 }
                 sys::mpv_event_id_MPV_EVENT_PLAYBACK_RESTART => {
-                    self.seek_finished();
-                    // time-pos is reported before the restart; pick up the final position.
-                    if let Ok(t) = self.mpv.get_property::<f64>("time-pos") {
-                        self.time = t;
-                    }
+                    // Never query the core here: it may already be decoding the
+                    // next seek, and this is also the thread that renders video.
+                    // Drain old events before dispatching the next queued target.
+                    self.seek_in_flight = None;
                 }
                 sys::mpv_event_id_MPV_EVENT_FILE_LOADED => file_loaded = true,
                 sys::mpv_event_id_MPV_EVENT_LOG_MESSAGE => {
@@ -333,7 +364,12 @@ impl Player {
             .seek_in_flight
             .is_some_and(|t| t.elapsed() > SEEK_TIMEOUT)
         {
-            self.seek_finished();
+            self.seek_in_flight = None;
+        }
+        if self.seek_in_flight.is_none()
+            && let Some(t) = self.reported_time
+        {
+            self.time = t;
         }
         if reload_tracks || file_loaded {
             self.tracks = self.read_tracks();
@@ -346,6 +382,11 @@ impl Player {
         }
         if file_loaded {
             self.on_file_loaded();
+        }
+        if self.seek_in_flight.is_none()
+            && let Some((t, exact)) = self.pending_seek.take()
+        {
+            self.send_seek(t, exact);
         }
     }
 
@@ -399,9 +440,7 @@ impl Player {
     }
 
     pub fn set_hwdec(&self, on: bool) {
-        let _ = self
-            .mpv
-            .set_property("hwdec", if on { "auto-safe" } else { "no" });
+        self.command_async(&["set", "hwdec", hwdec_mode(on)]);
     }
 
     pub fn set_langs(&self, audio: &str, sub: &str) {
@@ -515,7 +554,7 @@ impl Player {
     }
 
     pub fn set_pause(&self, pause: bool) {
-        let _ = self.mpv.set_property("pause", pause);
+        self.command_async(&["set", "pause", if pause { "yes" } else { "no" }]);
     }
 
     pub fn toggle_pause(&self) {
@@ -545,13 +584,6 @@ impl Player {
         // Show the target immediately; mpv's time-pos follows when the frame is ready.
         self.time = t;
         self.seek_in_flight = Some(Instant::now());
-    }
-
-    fn seek_finished(&mut self) {
-        self.seek_in_flight = None;
-        if let Some((t, exact)) = self.pending_seek.take() {
-            self.send_seek(t, exact);
-        }
     }
 
     pub fn seek_relative(&mut self, delta: f64) {
@@ -774,5 +806,89 @@ unsafe fn create_target(gl: &glow::Context, width: i32, height: i32) -> Result<T
             width,
             height,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exercise the real decoder and Player event/seek queue without a GUI.
+    /// Run under an external timeout to catch decoder/driver hangs as well.
+    #[test]
+    #[ignore = "requires WEEBSHOT_SAMPLE; set WEEBSHOT_EXPECT_HWDEC to require a GPU backend"]
+    fn backward_scrubbing_and_screenshot() {
+        let sample =
+            PathBuf::from(std::env::var_os("WEEBSHOT_SAMPLE").expect("set WEEBSHOT_SAMPLE"));
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_option("vo", "null")?;
+            init.set_option("ao", "null")?;
+            init.set_option("config", "no")?;
+            init.set_option("pause", "yes")?;
+            init.set_option("keep-open", "yes")?;
+            init.set_option("hwdec", hwdec_mode(true))?;
+            Ok(())
+        })
+        .unwrap();
+        for (i, (name, format)) in OBSERVED.iter().enumerate() {
+            mpv.observe_property(name, *format, i as u64).unwrap();
+        }
+        let mut player = Player::with_handles(Box::leak(Box::new(mpv)), None);
+        player.load(&sample).unwrap();
+
+        let wait = |player: &mut Player, ready: &dyn Fn(&Player) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                player.poll();
+                if ready(player) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "timed out waiting for mpv");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+        wait(&mut player, &|p| {
+            p.duration > 0.0 && p.reported_time.is_some()
+        });
+        if let Ok(expected) = std::env::var("WEEBSHOT_EXPECT_HWDEC") {
+            assert_eq!(
+                player.mpv.get_property::<String>("hwdec-current").unwrap(),
+                expected
+            );
+        }
+        // Each burst replaces pending requests, ending with an exact backwards
+        // target. Pause uses the same path as the frame stepping UI.
+        for round in 0..30 {
+            let end = 1.0 + (round % 10) as f64;
+            player.seek(end + 15.0, true);
+            for step in (0..20).rev() {
+                player.seek(end + step as f64 * 0.5, false);
+            }
+            player.seek(end, true);
+            player.set_pause(true);
+            wait(&mut player, &|p| {
+                p.seek_in_flight.is_none()
+                    && p.pending_seek.is_none()
+                    && p.reported_time.is_some_and(|t| (t - end).abs() < 0.1)
+            });
+        }
+        // This is the source frame used by screenshot upscaling: it must remain
+        // downloadable even with hardware decoding enabled.
+        let dir = std::env::temp_dir().join(format!("weebshot-seek-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shot = dir.join("frame.png");
+        player.screenshot(&shot, ShotFormat::Png, false).unwrap();
+        let image = image::open(&shot).unwrap();
+        assert_eq!(Some(image.width()), player.video_width);
+        assert_eq!(Some(image.height()), player.video_height);
+        std::fs::remove_dir_all(dir).unwrap();
+        player.close();
+        assert!(player.seek_in_flight.is_none());
+        assert!(player.pending_seek.is_none());
+        let mpv = player.mpv as *const Mpv as *mut Mpv;
+        drop(player);
+        // No render context or references remain; stop decoder threads before
+        // the test process unloads the GPU libraries.
+        unsafe { drop(Box::from_raw(mpv)) };
     }
 }

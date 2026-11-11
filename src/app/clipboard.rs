@@ -6,7 +6,7 @@ use std::{
 use eframe::egui;
 use image::RgbaImage;
 
-use super::App;
+use super::{App, JobState};
 use crate::{
     export::{self, SubMode, ffmpeg::StillJob},
     settings::ShotFormat,
@@ -62,12 +62,29 @@ pub(super) fn read_image(path: &Path) -> Result<RgbaImage, String> {
 }
 
 impl App {
+    fn image_copy_pending(&self) -> bool {
+        self.clipboard.image.is_some()
+            || self.jobs.iter().any(|job| {
+                job.output.is_none()
+                    && matches!(job.state, JobState::Queued | JobState::Running { .. })
+            })
+    }
+
+    pub(super) fn set_clipboard_image(&mut self, image: RgbaImage) -> Result<(), arboard::Error> {
+        let (width, height) = image.dimensions();
+        self.clipboard.backend()?.set_image(arboard::ImageData {
+            width: width as usize,
+            height: height as usize,
+            bytes: Cow::Owned(image.into_raw()),
+        })
+    }
+
     pub(super) fn load_clipboard_image(
         &mut self,
         ctx: &egui::Context,
         load: impl FnOnce() -> Result<RgbaImage, String> + Send + 'static,
     ) {
-        if self.clipboard.image.is_some() {
+        if self.image_copy_pending() {
             return self.error("Wait for the current image copy to finish");
         }
         let (tx, rx) = crossbeam_channel::bounded(1);
@@ -80,8 +97,16 @@ impl App {
     }
 
     pub(super) fn copy_screenshot(&mut self, ctx: &egui::Context) {
-        if self.clipboard.image.is_some() {
+        if self.image_copy_pending() {
             return self.error("Wait for the current image copy to finish");
+        }
+        // An image clipboard holds one still. Both uses the burned-in variant.
+        let burn = self.effective_sub_mode(self.settings.shot_subs) != SubMode::Off;
+        if self.settings.shot_anime4k.enabled {
+            return match self.queue_upscaled_frame(burn, None) {
+                Ok(()) => self.info("Anime4K frame copy queued"),
+                Err(error) => self.error(error),
+            };
         }
         let Some(input) = self.player.file.clone() else {
             return self.error("Open a video first");
@@ -102,8 +127,6 @@ impl App {
         }
         let scratch = ScratchShot(dir);
         let path = scratch.0.join("frame.png");
-        // An image clipboard holds one still. Both uses the burned-in variant.
-        let burn = self.effective_sub_mode(self.settings.shot_subs) != SubMode::Off;
         if self.settings.shot_crop
             && let Some(crop) = self.view_crop()
         {
@@ -158,16 +181,7 @@ impl App {
         {
             self.clipboard.image = None;
             let result = result.and_then(|image| {
-                let (width, height) = image.dimensions();
-                self.clipboard
-                    .backend()
-                    .and_then(|clipboard| {
-                        clipboard.set_image(arboard::ImageData {
-                            width: width as usize,
-                            height: height as usize,
-                            bytes: Cow::Owned(image.into_raw()),
-                        })
-                    })
+                self.set_clipboard_image(image)
                     .map_err(|error| error.to_string())
             });
             match result {

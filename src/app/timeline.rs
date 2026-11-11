@@ -178,6 +178,29 @@ impl TimelineState {
         self.marker_preview = preview;
         self.restore_time = restore;
     }
+
+    /// The cue list was replaced (track switched): selection and any in-progress text
+    /// edit refer to lines that no longer exist. An orphaned `editing_cue` would never
+    /// be drawn again, and it gates all timeline interaction.
+    pub(super) fn cues_replaced(&mut self) {
+        self.selected_cue = None;
+        self.editing_cue = None;
+    }
+
+    /// Cue `idx` was deleted: later indices shift down, and anything pointing at the
+    /// deleted line itself no longer refers to anything.
+    pub(super) fn cue_removed(&mut self, idx: usize) {
+        let shift = |i: usize| match i {
+            i if i == idx => None,
+            i if i > idx => Some(i - 1),
+            i => Some(i),
+        };
+        self.selected_cue = self.selected_cue.and_then(shift);
+        self.editing_cue = self
+            .editing_cue
+            .take()
+            .and_then(|(i, text)| shift(i).map(|i| (i, text)));
+    }
 }
 
 pub enum Event {

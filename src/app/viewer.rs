@@ -74,8 +74,9 @@ pub fn crop_for_view(
     };
     let whole = crop.width as f32 >= vw - 2.0 && crop.height as f32 >= vh - 2.0;
     (crop.width >= 16 && crop.height >= 16 && !whole).then(|| Crop {
-        width: crop.width.min(vw as u32 - crop.x),
-        height: crop.height.min(vh as u32 - crop.y),
+        // Rounding to even can push x/y one past an odd source edge.
+        width: crop.width.min((vw as u32).saturating_sub(crop.x)),
+        height: crop.height.min((vh as u32).saturating_sub(crop.y)),
         ..crop
     })
 }

@@ -130,7 +130,10 @@ impl CueLoader {
     /// Write the current cues back out as ASS, reusing the original header so untouched
     /// lines keep their original fonts/colors/position.
     pub fn write_to(&self, path: &Path) -> io::Result<()> {
-        let mut f = File::create(path)?;
+        self.write_ass(File::create(path)?)
+    }
+
+    pub fn write_ass(&self, mut f: impl Write) -> io::Result<()> {
         let header = if self.header.is_empty() {
             FALLBACK_HEADER
         } else {

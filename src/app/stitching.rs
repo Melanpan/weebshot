@@ -496,7 +496,7 @@ impl App {
                 self.stitch.id = None;
                 self.stitch.cancel = None;
                 match result {
-                    Ok(()) => self.info("Saved layered Photoshop PSD"),
+                    Ok(_) => self.info("Saved layered Photoshop PSD"),
                     Err(error) if error == "cancelled" => self.info("PSD export cancelled"),
                     Err(error) => self.error(format!("Could not save PSD: {error}")),
                 }

@@ -236,14 +236,18 @@ impl Thumbs {
         }
     }
 
+    /// Thin the cache to roughly half `MAX_CACHED`, keeping everything inside the
+    /// current detail range (if any). The keyframe overview of a long file can exceed
+    /// the cap on its own, so this must also work without a detail range.
     fn evict(&mut self) {
-        let Some((a, b, _)) = self.detail else { return };
-        let (lo, hi) = ((a * 1000.0) as i64, (b * 1000.0) as i64);
+        let detail = self
+            .detail
+            .map(|(a, b, _)| ((a * 1000.0) as i64, (b * 1000.0) as i64));
         let keep_every = (self.frames.len() / (MAX_CACHED / 2)).max(2);
         let mut i = 0;
         self.frames.retain(|&k, _| {
             i += 1;
-            (lo..=hi).contains(&k) || i % keep_every == 0
+            detail.is_some_and(|(lo, hi)| (lo..=hi).contains(&k)) || i % keep_every == 0
         });
     }
 

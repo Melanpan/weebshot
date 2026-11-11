@@ -67,9 +67,12 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     }
 }
 
-fn curl() -> Command {
+/// `max_secs` bounds the whole transfer: a stalled connection must not leave the
+/// updater "busy" for the rest of the session.
+fn curl(max_secs: u32) -> Command {
     let mut cmd = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
     cmd.args(["-fsSL", "--retry", "2", "-A", "weebshot-updater"])
+        .args(["--connect-timeout", "15", "--max-time", &max_secs.to_string()])
         .stdin(Stdio::null());
     hide_console(&mut cmd);
     cmd
@@ -96,7 +99,7 @@ fn parse_release(json: &str) -> Result<Release, String> {
 
 fn fetch_latest() -> Result<Release, String> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo());
-    let out = curl()
+    let out = curl(30)
         .args(["-H", "Accept: application/vnd.github+json", &url])
         .output()
         .map_err(|e| format!("couldn't run curl: {e}"))?;
@@ -201,7 +204,7 @@ pub fn can_self_update() -> bool {
 
 fn download(url: &str, to: &Path) -> Result<(), String> {
     log::info("update", format!("downloading {url}"));
-    let status = curl()
+    let status = curl(15 * 60)
         .arg("-o")
         .arg(to)
         .arg(url)

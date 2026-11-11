@@ -5,14 +5,14 @@ use eframe::egui::{self, RichText};
 use super::{App, JobState, dot, widgets};
 use crate::fonts::icon;
 use crate::log::{self, Level};
-use crate::util::{fmt_time, human_size, reveal};
+use crate::util::{human_size, reveal};
 
 impl App {
     pub(super) fn queue_tab(&mut self, ui: &mut egui::Ui) {
         let p = self.palette;
         if self.jobs.is_empty() {
             ui.add_space(8.0);
-            ui.weak("No exports yet. Mark In/Out on the timeline and press Export clip.");
+            ui.weak("No exports yet.");
             return;
         }
         ui.horizontal(|ui| {
@@ -80,13 +80,14 @@ impl App {
                                                 {
                                                     remove = Some(job.id);
                                                 }
-                                                if ui
-                                                    .small_button(icon::FOLDER_OPEN)
-                                                    .on_hover_text("Show in folder")
-                                                    .clicked()
-                                                    && let Some(dir) = job.job.output.parent()
+                                                if let Some(output) = job.output.as_deref()
+                                                    && let Some(dir) = output.parent()
+                                                    && ui
+                                                        .small_button(icon::FOLDER_OPEN)
+                                                        .on_hover_text("Show in folder")
+                                                        .clicked()
                                                 {
-                                                    reveal(dir, Some(&job.job.output));
+                                                    reveal(dir, Some(output));
                                                 }
                                             }
                                             JobState::Failed(_) => {
@@ -110,20 +111,19 @@ impl App {
                                             egui::Label::new(RichText::new(&job.name).strong())
                                                 .truncate(),
                                         )
-                                        .on_hover_text(job.job.output.display().to_string());
+                                        .on_hover_text(
+                                            job.output
+                                                .as_deref()
+                                                .map_or_else(String::new, |path| {
+                                                    path.display().to_string()
+                                                }),
+                                        );
                                     },
                                 );
                             });
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} · {} → {}",
-                                    job.job.format.short(),
-                                    fmt_time(job.job.start),
-                                    fmt_time(job.job.end)
-                                ))
-                                .weak()
-                                .small(),
-                            );
+                            if let Some(details) = &job.details {
+                                ui.weak(details);
+                            }
                             match &job.state {
                                 JobState::Queued => {
                                     ui.weak("Waiting…");
@@ -143,16 +143,18 @@ impl App {
                                     });
                                 }
                                 JobState::Done => {
-                                    let size = std::fs::metadata(&job.job.output)
-                                        .map(|m| m.len())
-                                        .unwrap_or(0);
+                                    let details = match (&job.output, job.size) {
+                                        (None, _) => "Copied".to_owned(),
+                                        (Some(_), Some(size)) => human_size(size),
+                                        (Some(_), None) => "Saved".to_owned(),
+                                    };
                                     let took = job
                                         .elapsed
                                         .map(|d| format!(" in {:.1}s", d.as_secs_f32()))
                                         .unwrap_or_default();
                                     ui.colored_label(
                                         p.ok,
-                                        format!("{} {}{took}", icon::CHECK, human_size(size)),
+                                        format!("{} {details}{took}", icon::CHECK),
                                     );
                                 }
                                 JobState::Failed(e) => {
@@ -163,7 +165,7 @@ impl App {
                                         )
                                         .wrap(),
                                     )
-                                    .on_hover_text("Full ffmpeg output is in the Logs tab");
+                                    .on_hover_text("Full process output is in the Logs tab");
                                 }
                             }
                         });
@@ -173,8 +175,8 @@ impl App {
 
         if let Some(id) = retry
             && let Some(pos) = self.jobs.iter().position(|j| j.id == id)
+            && let Some(job) = self.jobs.remove(pos).retry
         {
-            let job = self.jobs.remove(pos).job;
             self.submit(job);
         }
         if let Some(id) = remove {
@@ -231,20 +233,27 @@ impl App {
             }
         });
 
-        let search = view.search.to_lowercase();
-        let min = view.min_level.unwrap_or(Level::Debug);
-        let lines: Vec<log::Line> = log::with_lines(|lines| {
-            lines
-                .iter()
-                .filter(|l| l.level >= min)
-                .filter(|l| {
-                    search.is_empty()
-                        || l.text.to_lowercase().contains(&search)
-                        || l.source.contains(&search)
-                })
-                .cloned()
-                .collect()
-        });
+        // Filtering clones every matching line under the global log lock; only redo it
+        // when something actually changed instead of on every repaint.
+        let key = (log::sequence(), view.search.to_lowercase(), view.min_level);
+        if view.cache_key.as_ref() != Some(&key) {
+            let search = &key.1;
+            let min = view.min_level.unwrap_or(Level::Debug);
+            view.cache = log::with_lines(|lines| {
+                lines
+                    .iter()
+                    .filter(|l| l.level >= min)
+                    .filter(|l| {
+                        search.is_empty()
+                            || l.text.to_lowercase().contains(search)
+                            || l.source.contains(search)
+                    })
+                    .cloned()
+                    .collect()
+            });
+            view.cache_key = Some(key);
+        }
+        let lines = &view.cache;
 
         let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
         egui::ScrollArea::both()

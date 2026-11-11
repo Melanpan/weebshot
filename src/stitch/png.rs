@@ -4,7 +4,7 @@ use super::{Artifact, check_cancel};
 use anyhow::{Result, bail};
 use image::{ImageEncoder, RgbaImage};
 use std::{
-    io::{Read, Write},
+    io::{BufWriter, Write},
     path::Path,
     sync::atomic::AtomicBool,
 };
@@ -40,35 +40,76 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-/// Cancellation is checked during PNG compression writes and the bounded metadata
-/// copy. A separate scratch artifact guarantees partial files are removed on errors.
+/// Signature plus the IHDR chunk; pHYs must follow IHDR and precede IDAT.
+const IHDR_END: usize = 33;
+
+fn phys_chunk(aspect: (u32, u32)) -> Vec<u8> {
+    let mut chunk = Vec::from(&b"pHYs"[..]);
+    chunk.extend_from_slice(&aspect.1.to_be_bytes());
+    chunk.extend_from_slice(&aspect.0.to_be_bytes());
+    chunk.push(0); // unspecified units; only the ratio matters
+    let mut out = Vec::with_capacity(chunk.len() + 8);
+    out.extend_from_slice(&9u32.to_be_bytes());
+    out.extend_from_slice(&chunk);
+    out.extend_from_slice(&crc32(&chunk).to_be_bytes());
+    out
+}
+
+/// Inserts the pHYs chunk right after IHDR while the encoder streams, so the (often
+/// 100+ MB) PNG is written once instead of being copied through a second file.
+/// Cancellation is checked on every write.
+struct PhysWriter<'a> {
+    file: BufWriter<std::fs::File>,
+    cancel: &'a AtomicBool,
+    phys: Vec<u8>,
+    /// Bytes seen before the IHDR chunk was complete.
+    head: Vec<u8>,
+    injected: bool,
+}
+
+impl Write for PhysWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(std::io::Error::other("cancelled"));
+        }
+        if self.injected {
+            self.file.write_all(bytes)?;
+            return Ok(bytes.len());
+        }
+        self.head.extend_from_slice(bytes);
+        if self.head.len() >= IHDR_END {
+            if &self.head[12..16] != b"IHDR" {
+                return Err(std::io::Error::other("Invalid PNG header"));
+            }
+            self.file.write_all(&self.head[..IHDR_END])?;
+            self.file.write_all(&self.phys)?;
+            self.file.write_all(&self.head[IHDR_END..])?;
+            self.head = Vec::new();
+            self.injected = true;
+        }
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// Encode into a scratch artifact (removed on any error) and rename it into place.
 pub fn save(
     canvas: &RgbaImage,
     path: &Path,
     aspect: (u32, u32),
     cancel: &AtomicBool,
 ) -> Result<()> {
-    struct CancelWriter<'a> {
-        file: std::fs::File,
-        cancel: &'a AtomicBool,
-    }
-    impl Write for CancelWriter<'_> {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(std::io::Error::other("cancelled"));
-            }
-            self.file.write(bytes)
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            self.file.flush()
-        }
-    }
     let scratch = Artifact(path.with_extension("pixels.png"));
-    let writer = CancelWriter {
-        file: std::fs::File::create(&scratch.0)?,
+    let mut writer = PhysWriter {
+        file: BufWriter::with_capacity(256 * 1024, std::fs::File::create(&scratch.0)?),
         cancel,
+        phys: phys_chunk(aspect),
+        head: Vec::new(),
+        injected: false,
     };
-    let result = image::codecs::png::PngEncoder::new(writer).write_image(
+    let result = image::codecs::png::PngEncoder::new(&mut writer).write_image(
         canvas.as_raw(),
         canvas.width(),
         canvas.height(),
@@ -76,30 +117,12 @@ pub fn save(
     );
     check_cancel(cancel)?;
     result?;
-    let mut src = std::fs::File::open(&scratch.0)?;
-    let mut dst = std::fs::File::create(path)?;
-    let mut header = [0; 33];
-    src.read_exact(&mut header)?;
-    if &header[12..16] != b"IHDR" {
+    if !writer.injected {
         bail!("Invalid PNG header");
     }
-    dst.write_all(&header)?;
-    let mut chunk = Vec::from(&b"pHYs"[..]);
-    chunk.extend_from_slice(&aspect.1.to_be_bytes());
-    chunk.extend_from_slice(&aspect.0.to_be_bytes());
-    chunk.push(0); // unspecified units; only the ratio matters
-    dst.write_all(&9u32.to_be_bytes())?;
-    dst.write_all(&chunk)?;
-    dst.write_all(&crc32(&chunk).to_be_bytes())?;
-    let mut buf = [0; 64 * 1024];
-    loop {
-        check_cancel(cancel)?;
-        let n = src.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        dst.write_all(&buf[..n])?;
-    }
+    writer.flush()?;
+    drop(writer);
+    std::fs::rename(&scratch.0, path)?;
     Ok(())
 }
 

@@ -422,6 +422,36 @@ impl App {
         }
     }
 
+    fn anime4k_ui(ui: &mut egui::Ui, options: &mut crate::export::anime4k::Options) {
+        use crate::export::anime4k::{Device, Model, Speed, Variant};
+
+        ui.checkbox(&mut options.enabled, "Anime4K (2×)");
+        if options.enabled {
+            macro_rules! combo {
+                ($field:ident, $kind:ident, $label:literal) => {
+                    ui.horizontal(|ui| {
+                        ui.weak($label);
+                        egui::ComboBox::from_id_salt(stringify!($field))
+                            .selected_text(options.$field.label())
+                            .show_ui(ui, |ui| {
+                                for &choice in $kind::ALL {
+                                    ui.selectable_value(
+                                        &mut options.$field,
+                                        choice,
+                                        choice.label(),
+                                    );
+                                }
+                            });
+                    });
+                };
+            }
+            combo!(model, Model, "Model");
+            combo!(speed, Speed, "Preset");
+            combo!(variant, Variant, "Variant");
+            combo!(device, Device, "Device");
+        }
+    }
+
     fn screenshot_ui(&mut self, ui: &mut egui::Ui) {
         heading(ui, "Screenshot");
         ui.weak("Image format");
@@ -440,6 +470,9 @@ impl App {
             crop,
             "Match preview (zoom)",
         );
+        ui.push_id("shot_anime4k", |ui| {
+            Self::anime4k_ui(ui, &mut self.settings.shot_anime4k)
+        });
     }
 
     fn clip_ui(&mut self, ui: &mut egui::Ui) {
@@ -529,6 +562,9 @@ impl App {
             crop,
             "Match preview (zoom)",
         );
+        ui.push_id("clip_anime4k", |ui| {
+            Self::anime4k_ui(ui, &mut self.settings.clip_anime4k)
+        });
     }
 
     fn video_ui(&mut self, ui: &mut egui::Ui, duration: f64) {

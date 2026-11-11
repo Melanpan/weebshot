@@ -71,7 +71,9 @@ fn pipe(
         rx: crossbeam_channel::Receiver<std::io::Result<Vec<u8>>>,
         chunk: std::io::Cursor<Vec<u8>>,
         cancel: &'a AtomicBool,
-        started: Instant,
+        /// Last time the decoder produced output. A long but steadily progressing
+        /// decode (a 60 s HEVC range on a slow CPU) must not be cut off; a silent one must.
+        last_output: Instant,
     }
     impl Read for Stream<'_> {
         fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
@@ -79,7 +81,7 @@ fn pipe(
                 if self.cancel.load(Ordering::Relaxed) {
                     return Err(std::io::Error::other("Cancelled"));
                 }
-                if self.started.elapsed() > Duration::from_secs(120) {
+                if self.last_output.elapsed() > Duration::from_secs(120) {
                     return Err(std::io::Error::other("FFmpeg decode timed out"));
                 }
                 let n = self.chunk.read(out)?;
@@ -87,7 +89,10 @@ fn pipe(
                     return Ok(n);
                 }
                 match self.rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(chunk) => self.chunk = std::io::Cursor::new(chunk?),
+                    Ok(chunk) => {
+                        self.chunk = std::io::Cursor::new(chunk?);
+                        self.last_output = Instant::now();
+                    }
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return Ok(0),
                     Err(_) => (),
                 }
@@ -99,7 +104,7 @@ fn pipe(
             rx,
             chunk: std::io::Cursor::new(Vec::new()),
             cancel,
-            started: Instant::now(),
+            last_output: Instant::now(),
         };
         consume(&mut stream)
     };

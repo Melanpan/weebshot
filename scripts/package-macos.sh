@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds dist/weebshot-macos-arm64.zip containing weebshot.app (Apple Silicon).
 #
-# Needs: brew install mpv gifsicle dylibbundler, and Rust.
+# Needs: brew install mpv ffmpeg gifsicle dylibbundler pkgconf cmake, and Rust.
 # ffmpeg is a pinned static build (Homebrew's lacks libass, so it can't burn in subtitles),
 # downloaded unless FFMPEG points at a local executable.
 # The app is not signed or notarized: on first launch, right-click → Open.
@@ -35,6 +35,14 @@ else
     unzip -o -q "$zip" ffmpeg -d "$app/Contents/MacOS/"
 fi
 cp LICENSE THIRD-PARTY.md "$app/Contents/Resources/"
+helper_build="$dist/anime4k-build"
+helper_stage="$dist/anime4k"
+PKG_CONFIG_PATH="$(brew --prefix ffmpeg)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
+    cmake -S native/anime4k -B "$helper_build" -DAC_CORE_WITH_OPENCL=ON
+cmake --build "$helper_build" --config Release --parallel
+cmake --install "$helper_build" --config Release --prefix "$helper_stage"
+cp "$helper_stage/bin/weebshot-anime4k" "$app/Contents/MacOS/"
+cp -r "$helper_stage/licenses" "$app/Contents/Resources/anime4k"
 
 # Icon: build an .icns from the PNG.
 iconset="$dist/weebshot.iconset"
@@ -66,7 +74,7 @@ PLIST
 
 # Copy every Homebrew library weebshot and gifsicle need into Frameworks and rewrite their paths
 # (ffmpeg is static).
-for bin in weebshot gifsicle; do
+for bin in weebshot gifsicle weebshot-anime4k; do
     dylibbundler -of -b -cd \
         -x "$app/Contents/MacOS/$bin" \
         -d "$app/Contents/Frameworks/" \
@@ -83,6 +91,7 @@ for file in "$app/Contents/MacOS/"* "$app/Contents/Frameworks/"*; do
 done
 # Rewriting load commands invalidates signatures; ad-hoc sign so Apple Silicon will run it.
 codesign --force --deep --sign - "$app"
+"$app/Contents/MacOS/weebshot-anime4k" probe cpu
 
 (cd "$dist" && rm -f weebshot-macos-arm64.zip && ditto -c -k --keepParent weebshot.app weebshot-macos-arm64.zip)
 echo "Packaged $dist/weebshot-macos-arm64.zip"

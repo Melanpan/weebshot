@@ -38,6 +38,16 @@ subtitles are drawn at their normal size at the bottom of the crop, like in the 
 
 These screenshots are rendered by ffmpeg instead of the player, so they take a moment longer.
 
+## Anime4K
+
+Enable **Anime4K (2×)** in the Screenshot section to double both dimensions after cropping.
+The setting applies to saved PNG, JPG, and WebP screenshots and to **Copy**. With
+**Both** selected, screenshots save the subbed and raw frames, while Copy copies the
+subbed frame. The queue shows progress and lets you cancel or retry.
+
+Screenshot and clip settings are saved separately and start off. See the
+[model and device controls](clips.md#anime4k) for the available choices.
+
 ## File names
 
 Default: `{name}_{time}`, e.g. `[Group] Show - 01_12m03s417.png`. Change it in *Options → General*.

@@ -40,7 +40,8 @@ jobs:
           sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libmpv-dev ffmpeg gifsicle libxkbcommon-dev libgl1-mesa-dev \
-            libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev file
+            libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev file \
+            libavformat-dev libavcodec-dev libavutil-dev ocl-icd-opencl-dev opencl-clhpp-headers
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
@@ -56,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install libraries and tools
-        run: brew install mpv gifsicle dylibbundler
+        run: brew install mpv ffmpeg gifsicle dylibbundler pkgconf cmake
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test

@@ -85,6 +85,7 @@ pub struct Settings {
     pub clip_template: String,
 
     // Screenshot
+    pub shot_anime4k: crate::export::anime4k::Options,
     pub shot_format: ShotFormat,
     pub shot_subs: SubMode,
     /// When the preview is zoomed in, save only the visible part.
@@ -93,6 +94,7 @@ pub struct Settings {
     pub stitch: crate::stitch::Options,
 
     // Clip
+    pub clip_anime4k: crate::export::anime4k::Options,
     pub clip_format: ClipFormat,
     pub clip_stream_copy: bool,
     pub quality: Quality,
@@ -161,10 +163,12 @@ impl Default for Settings {
             out_dir: None,
             shot_template: "{name}_{time}".into(),
             clip_template: "{name}_{start}-{end}".into(),
+            shot_anime4k: Default::default(),
             shot_format: ShotFormat::Png,
             shot_subs: SubMode::Burned,
             shot_crop: false,
             stitch: crate::stitch::Options::default(),
+            clip_anime4k: Default::default(),
             clip_format: ClipFormat::Webm,
             clip_stream_copy: false,
             quality: Quality::Balanced,
@@ -237,6 +241,30 @@ mod tests {
         let settings: Settings = ron::from_str("(shot_format: Jpg)").unwrap();
         assert_eq!(settings.side_tab, SideTab::Capture);
         assert_eq!(settings.shot_format, ShotFormat::Jpg);
+    }
+
+    #[test]
+    fn anime4k_settings_are_independent_and_opt_in() {
+        use crate::export::anime4k::{Device, Model, Options, Speed, Variant};
+
+        let mut settings: Settings = ron::from_str("(shot_format: Jpg)").unwrap();
+        assert_eq!(settings.shot_anime4k, Options::default());
+        assert_eq!(settings.clip_anime4k, Options::default());
+        assert!(!settings.shot_anime4k.enabled);
+        assert_eq!(settings.shot_anime4k.model, Model::AcNet);
+        assert_eq!(settings.shot_anime4k.speed, Speed::Balanced);
+        assert_eq!(settings.shot_anime4k.variant, Variant::Neutral);
+        assert_eq!(settings.shot_anime4k.device, Device::Auto);
+
+        settings.shot_anime4k.enabled = true;
+        settings.shot_anime4k.variant = Variant::Denoise;
+        settings.clip_anime4k.model = Model::ArNet;
+        settings.clip_anime4k.device = Device::Cpu;
+        let saved = ron::to_string(&settings).unwrap();
+        let restored: Settings = ron::from_str(&saved).unwrap();
+        assert_eq!(restored.shot_anime4k, settings.shot_anime4k);
+        assert_eq!(restored.clip_anime4k, settings.clip_anime4k);
+        assert!(!restored.clip_anime4k.enabled);
     }
 
     #[test]

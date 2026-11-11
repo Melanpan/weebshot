@@ -45,6 +45,8 @@ struct Log {
 static LOG: OnceLock<Log> = OnceLock::new();
 /// Errors logged since the Logs tab was last looked at.
 static UNSEEN_ERRORS: AtomicUsize = AtomicUsize::new(0);
+/// Bumped on every change to the log, so views can cache their filtered copy.
+static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 fn log_store() -> &'static Log {
     LOG.get_or_init(|| Log {
@@ -72,6 +74,12 @@ pub fn log(level: Level, source: &'static str, text: impl Into<String>) {
         source,
         text,
     });
+    SEQUENCE.fetch_add(1, Ordering::Release);
+}
+
+/// Changes whenever a line is added or the log is cleared.
+pub fn sequence() -> usize {
+    SEQUENCE.load(Ordering::Acquire)
 }
 
 pub fn info(source: &'static str, text: impl Into<String>) {
@@ -93,6 +101,7 @@ pub fn with_lines<R>(f: impl FnOnce(&VecDeque<Line>) -> R) -> R {
 pub fn clear() {
     log_store().lines.lock().unwrap().clear();
     UNSEEN_ERRORS.store(0, Ordering::Relaxed);
+    SEQUENCE.fetch_add(1, Ordering::Release);
 }
 
 pub fn unseen_errors() -> usize {

@@ -102,3 +102,26 @@ fixtures and optional regressions that use supplied video.
 - `assets/sounds` — see `assets/sounds/README.md` for the shutter sample's license.
 - `assets/mascot*.png`, `assets/icon.png`, `assets/icon.ico` — the mascot and the round program
   icon cropped from it. `assets/weebshot.rc` embeds the icon into the exe (via `build.rs`).
+
+## Building the Anime4K helper
+
+The Rust app can build on its own. To test upscaling from a source checkout, also build the
+helper with CMake 3.28+, a C++17 compiler, and FFmpeg development libraries (libavformat,
+libavcodec, libavutil). The platform packaging scripts set up the required libraries and
+stage the executable, dependencies, and license notices.
+
+On Linux or macOS, configure and build with:
+
+```sh
+cmake -S native/anime4k -B target/anime4k
+cmake --build target/anime4k --config Release --parallel
+target/anime4k/weebshot-anime4k probe cpu
+cargo run
+cargo test anime4k::tests -- --ignored
+```
+
+Source launches through Cargo find the helper in this native build directory or in the
+packaging staging directories. Rebuild the helper after changing native code.
+
+Use `probe gpu` to exercise OpenCL on supported hardware. To build a CPU-only helper, pass
+`-DAC_CORE_WITH_OPENCL=OFF` at configure time.
