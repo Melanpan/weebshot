@@ -70,7 +70,9 @@ rpmbuild -bb "$root/packaging/weebshot.spec" \
     --define '_binary_payload w7.zstdio' \
     --define '_libdir /usr/lib64'
 
-rpm_path="$work/rpmbuild/RPMS/x86_64/weebshot-$version-1.x86_64.rpm"
+packages=("$work/rpmbuild/RPMS/x86_64/weebshot-$version-"*.x86_64.rpm)
+[[ ${#packages[@]} == 1 && -f "${packages[0]}" ]] || { echo 'Expected one built RPM' >&2; exit 1; }
+rpm_path="${packages[0]}"
 # Fixed release-asset name; the RPM's own metadata carries its version/release.
 cp "$rpm_path" "$dist/weebshot-x86_64.rpm"
 # Release RPMs are unsigned; verify both digests without requiring a signing key.

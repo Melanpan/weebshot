@@ -8,7 +8,7 @@
 
 Name:           weebshot
 Version:        %{weebshot_version}
-Release:        1
+Release:        2
 Summary:        Frame-accurate anime screenshots, clips, and stitched artwork
 License:        GPL-3.0-or-later
 URL:            https://github.com/Melanpan/weebshot
@@ -39,6 +39,15 @@ with dnf; the application does not replace RPM-managed files itself.
 %install
 mkdir -p %{buildroot}%{_libdir}/weebshot %{buildroot}%{_bindir}
 cp -a %{appdir}/. %{buildroot}%{_libdir}/weebshot/
+# AppImage extraction can create owner-only directories and writable libraries.
+# Installed system files must be readable/traversable by normal desktop users.
+find %{buildroot}%{_libdir}/weebshot -type d -exec chmod 0755 {} +
+find %{buildroot}%{_libdir}/weebshot -type f -exec chmod 0644 {} +
+chmod 0755 %{buildroot}%{_libdir}/weebshot/AppRun \
+    %{buildroot}%{_libdir}/weebshot/usr/bin/weebshot \
+    %{buildroot}%{_libdir}/weebshot/usr/bin/weebshot-anime4k \
+    %{buildroot}%{_libdir}/weebshot/usr/bin/ffmpeg \
+    %{buildroot}%{_libdir}/weebshot/usr/bin/gifsicle
 cat > %{buildroot}%{_bindir}/weebshot <<'LAUNCHER'
 #!/bin/sh
 unset APPIMAGE APPDIR ARGV0
@@ -51,6 +60,7 @@ install -Dm0644 %{appdir}/usr/share/doc/weebshot/LICENSE %{buildroot}%{_datadir}
 install -Dm0644 %{appdir}/usr/share/doc/weebshot/THIRD-PARTY.md %{buildroot}%{_datadir}/doc/weebshot/THIRD-PARTY.md
 
 %files
+%defattr(-,root,root,0755)
 %{_bindir}/weebshot
 %{_libdir}/weebshot/
 %{_datadir}/applications/weebshot.desktop
@@ -59,5 +69,8 @@ install -Dm0644 %{appdir}/usr/share/doc/weebshot/THIRD-PARTY.md %{buildroot}%{_d
 %doc %{_datadir}/doc/weebshot/
 
 %changelog
+* Wed Nov 11 2026 Weebshot contributors - 0.4.0-2
+- Normalize installed permissions and ownership; test GUI as an unprivileged user.
+
 * Wed Nov 11 2026 Weebshot contributors - 0.4.0-1
 - Initial upstream binary RPM with bundled runtime and desktop integration.

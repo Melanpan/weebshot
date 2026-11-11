@@ -116,6 +116,8 @@
   installation, upgrades, and removal. Fedora container checks verify installation, codecs,
   CPU upscaling, installed-launcher GUI exports, package integrity, and removal before publication.
   Fedora supplies the matching core/X11 keyboard libraries to avoid a mixed-library shutdown crash.
+  RPM revision **0.4.0-2** fixes owner-only runtime directories and writable library modes;
+  files are root-owned and readable by desktop users, and GUI tests run as an unprivileged user.
 
 - Windows, Linux AppImage, and macOS Apple Silicon packaging now build and bundle the
   Anime4KCPP helper, its required runtime libraries, and dependency licence notices, and probe

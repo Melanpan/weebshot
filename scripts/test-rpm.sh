@@ -10,38 +10,49 @@ cleanup() {
 }
 trap cleanup EXIT
 
-dnf install -y "$package" xorg-x11-server-Xvfb
+dnf install -y "$package" xorg-x11-server-Xvfb shadow-utils util-linux
+useradd --create-home --shell /bin/bash weebshot-test
+chown weebshot-test:weebshot-test "$work"
+user=(runuser -u weebshot-test --)
+export TMPDIR="$work"
 rpm -V weebshot
+rpm -q --qf '[%{FILEMODES:perms} %{FILEUSERNAME} %{FILEGROUPNAME} %{FILENAMES}\n]' weebshot > "$work/permissions.txt"
+awk '
+    $2 != "root" || $3 != "root" { print "Non-root package ownership:", $0; bad=1 }
+    substr($1,1,1) == "d" && $1 != "drwxr-xr-x" { print "Inaccessible package directory:", $0; bad=1 }
+    substr($1,1,1) == "-" && $1 != "-rw-r--r--" && $1 != "-rwxr-xr-x" { print "Unsafe package permissions:", $0; bad=1 }
+    END { exit bad }
+' "$work/permissions.txt"
 runtime=/usr/lib64/weebshot/usr/bin
-test -x /usr/bin/weebshot
+"${user[@]}" test -x /usr/bin/weebshot
 test -f /usr/share/applications/weebshot.desktop
 test -f /usr/share/icons/hicolor/256x256/apps/weebshot.png
-"$runtime/weebshot-anime4k" probe cpu
-"$runtime/gifsicle" --version
-"$runtime/ffmpeg" -hide_banner -encoders > "$work/encoders.txt" 2>/dev/null
+"${user[@]}" "$runtime/weebshot-anime4k" probe cpu
+"${user[@]}" "$runtime/gifsicle" --version
+"${user[@]}" "$runtime/ffmpeg" -hide_banner -encoders > "$work/encoders.txt" 2>/dev/null
 grep -Fq libx264 "$work/encoders.txt"
 grep -Fq libvpx-vp9 "$work/encoders.txt"
-"$runtime/ffmpeg" -y -v error -f lavfi -i 'testsrc2=s=64x48:r=1:d=1' -frames:v 1 "$work/source.png"
-"$runtime/weebshot-anime4k" image cpu acnet-f8b4 "$work/source.png" "$work/upscaled.png"
+"${user[@]}" "$runtime/ffmpeg" -y -v error -f lavfi -i 'testsrc2=s=64x48:r=1:d=1' -frames:v 1 "$work/source.png"
+"${user[@]}" "$runtime/weebshot-anime4k" image cpu acnet-f8b4 "$work/source.png" "$work/upscaled.png"
 # PNG IHDR stores width/height as big-endian integers: 128 x 96.
 test "$(od -An -t u1 -j16 -N8 "$work/upscaled.png" | xargs)" = '0 0 0 128 0 0 0 96'
-"$runtime/ffmpeg" -v error -i "$work/upscaled.png" -f null -
+"${user[@]}" "$runtime/ffmpeg" -v error -i "$work/upscaled.png" -f null -
 
 # Exercise the installed launcher, desktop graphics dependencies, playback and
 # GUI exports on a software-rendered X server, without a host display or GPU.
 printf '1\n00:00:00,500 --> 00:00:04,500\nFedora RPM playback and export validation\n' > "$work/sample.srt"
-"$runtime/ffmpeg" -y -v error -f lavfi -i 'testsrc2=s=640x360:r=24:d=6' \
+"${user[@]}" "$runtime/ffmpeg" -y -v error -f lavfi -i 'testsrc2=s=640x360:r=24:d=6' \
     -i "$work/sample.srt" -f lavfi -i 'sine=f=440:r=48000:d=6' \
     -map 0:v -map 1:s -map 2:a -c:v libx264 -preset ultrafast -c:s srt -c:a aac "$work/sample.mkv"
-Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp > "$work/xvfb.log" 2>&1 &
+Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp -ac > "$work/xvfb.log" 2>&1 &
 xvfb_pid=$!
 for _ in {1..30}; do
     [[ ! -S /tmp/.X11-unix/X99 ]] || break
     sleep 0.1
 done
 export DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1
-mkdir -p "$work/shots"
-if ! timeout 120 /usr/bin/weebshot --docs-screenshots "$work/sample.mkv" "$work/shots" --at 2 > "$work/gui.log" 2>&1; then
+install -d -o weebshot-test -g weebshot-test "$work/shots"
+if ! timeout 120 "${user[@]}" /usr/bin/weebshot --docs-screenshots "$work/sample.mkv" "$work/shots" --at 2 > "$work/gui.log" 2>&1; then
     cat "$work/xvfb.log" "$work/gui.log"
     exit 1
 fi
@@ -60,7 +71,7 @@ if [[ "${#exports[@]}" != 2 ]]; then
 fi
 for file in "${exports[@]}"; do
     test -s "$file"
-    "$runtime/ffmpeg" -v error -i "$file" -f null -
+    "${user[@]}" "$runtime/ffmpeg" -v error -i "$file" -f null -
 done
 if [[ -n "${RPM_TEST_OUTPUT:-}" ]]; then
     mkdir -p "$RPM_TEST_OUTPUT"

@@ -7,6 +7,10 @@ on:
         description: 'Existing release tag (for example v0.4.0)'
         required: true
         type: string
+      replace_existing:
+        description: 'Replace an existing RPM asset after verification'
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -17,6 +21,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       RELEASE_TAG: ${{ inputs.tag }}
+      REPLACE_EXISTING: ${{ inputs.replace_existing }}
     steps:
       - uses: actions/checkout@v7
       - name: Install packaging tools
@@ -43,4 +48,7 @@ jobs:
           name: rpm
           path: dist/weebshot-x86_64.rpm
       - name: Attach verified RPM to release
-        run: gh release upload "$RELEASE_TAG" dist/weebshot-x86_64.rpm
+        run: |
+          args=("$RELEASE_TAG" dist/weebshot-x86_64.rpm)
+          if [[ "$REPLACE_EXISTING" == true ]]; then args+=(--clobber); fi
+          gh release upload "${args[@]}"
