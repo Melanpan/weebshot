@@ -405,7 +405,7 @@ impl App {
 
     fn primary_action(&mut self, ui: &mut egui::Ui, action: Action, label: &str, enabled: bool) {
         let shortcut = self.settings.keymap.text(action);
-        let text = if shortcut.is_empty() || ui.available_width() < 290.0 {
+        let text = if shortcut.is_empty() {
             label.to_string()
         } else {
             format!("{label}   ({shortcut})")
