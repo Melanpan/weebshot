@@ -47,6 +47,7 @@ chmod 0755 %{buildroot}%{_libdir}/weebshot/AppRun \
     %{buildroot}%{_libdir}/weebshot/usr/bin/weebshot \
     %{buildroot}%{_libdir}/weebshot/usr/bin/weebshot-anime4k \
     %{buildroot}%{_libdir}/weebshot/usr/bin/ffmpeg \
+    %{buildroot}%{_libdir}/weebshot/usr/bin/ffprobe \
     %{buildroot}%{_libdir}/weebshot/usr/bin/gifsicle
 cat > %{buildroot}%{_bindir}/weebshot <<'LAUNCHER'
 #!/bin/sh

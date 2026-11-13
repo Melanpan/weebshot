@@ -149,6 +149,9 @@ pub struct Settings {
     pub keymap: Keymap,
     pub recent: Vec<PathBuf>,
 
+    /// Optional local automation bridge; never enabled by migration.
+    pub mcp_enabled: bool,
+
     // Updates
     pub check_updates: bool,
     /// Unix time of the last automatic check.
@@ -206,6 +209,7 @@ impl Default for Settings {
             sound_volume: 60.0,
             keymap: Keymap::default(),
             recent: Vec::new(),
+            mcp_enabled: false,
             check_updates: true,
             last_update_check: 0,
             skipped_version: None,

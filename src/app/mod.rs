@@ -1,5 +1,6 @@
 //! The main window: state, actions and top-level layout.
 
+mod automation;
 mod clipboard;
 mod dock;
 mod docs;
@@ -52,6 +53,7 @@ enum OptionsPage {
     Export,
     Appearance,
     Shortcuts,
+    Advanced,
 }
 
 pub enum JobState {
@@ -124,6 +126,7 @@ pub struct ToolStatus {
 }
 
 pub struct App {
+    automation: automation::State,
     player: Player,
     settings: Settings,
     palette: Palette,
@@ -232,6 +235,7 @@ impl App {
         let runner = Runner::new(tools.clone(), cc.egui_ctx.clone());
 
         let mut app = Self {
+            automation: Default::default(),
             palette: settings.theme.palette(),
             player,
             settings,
@@ -314,6 +318,7 @@ impl App {
     fn open(&mut self, path: &Path) {
         match self.player.load(path) {
             Ok(()) => {
+                self.automation.media_revision = self.automation.media_revision.wrapping_add(1);
                 self.in_point = None;
                 self.out_point = None;
                 self.set_looping(false);
@@ -350,6 +355,7 @@ impl App {
     }
 
     fn close(&mut self) {
+        self.automation.media_revision = self.automation.media_revision.wrapping_add(1);
         self.stop_shuttle();
         self.play_until = None;
         self.player.close();
@@ -1522,17 +1528,24 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // eframe skips ui() for hidden/minimized windows. IPC wakes this
+        // callback too, so GUI commands and asynchronous completions must be
+        // drained here rather than depending on a visible repaint.
+        self.player.poll();
+        self.poll_automation(ctx);
+        self.poll_jobs();
+        self.poll_screenshots();
+        self.poll_clipboard();
+        self.update_window_title(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.player.poll();
-        self.poll_jobs();
         self.update_cues(&ctx);
         self.update_thumbs(&ctx);
         self.update_waveform(&ctx);
         self.poll_updater(&ctx);
-        self.poll_screenshots();
-        self.poll_clipboard();
-        self.update_window_title(&ctx);
         if self.script.is_none() {
             self.handle_input(&ctx);
         }

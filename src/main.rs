@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod decode;
 mod export;
 mod fonts;
 mod keymap;
 mod log;
+mod mcp;
 mod player;
 mod settings;
 mod sounds;
@@ -22,6 +24,37 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+    if args.iter().any(|a| {
+        a.as_os_str() == "--headless" || a.as_os_str() == "--mcp" || a.as_os_str() == "--mcp-socket"
+    }) {
+        let headless = args.iter().any(|a| a.as_os_str() == "--headless");
+        let enabled = args.iter().any(|a| a.as_os_str() == "--mcp");
+        let mut socket = None;
+        let mut valid = enabled;
+        let mut i = 0;
+        while i < args.len() {
+            match args[i].to_str() {
+                Some("--headless" | "--mcp") => {}
+                Some("--mcp-socket") if i + 1 < args.len() => {
+                    i += 1;
+                    socket = Some(args[i].clone());
+                }
+                _ => valid = false,
+            }
+            i += 1;
+        }
+        if !valid || (headless && socket.is_some()) {
+            eprintln!(
+                "Usage: weebshot --headless --mcp | weebshot --mcp [--mcp-socket /private/directory/gui.sock]"
+            );
+            std::process::exit(2);
+        }
+        if let Err(error) = mcp::run(headless, socket) {
+            eprintln!("Weebshot MCP: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     log::info(
         "app",
         format!("Weebshot {} starting", env!("CARGO_PKG_VERSION")),

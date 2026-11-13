@@ -47,6 +47,7 @@ export LDAI_OUTPUT="$dist/weebshot-x86_64.AppImage"
 "$tool" --appdir "$appdir" \
     --executable "$appdir/usr/bin/weebshot" \
     --executable "$(command -v ffmpeg)" \
+    --executable "$(command -v ffprobe)" \
     --executable "$(command -v gifsicle)" \
     --executable "$helper_stage/bin/weebshot-anime4k" \
     --library "$(find_lib libOpenCL.so.1)" \

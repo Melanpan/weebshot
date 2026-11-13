@@ -215,6 +215,9 @@ impl App {
                     lines
                         .iter()
                         .map(|l| {
+                            if let Some(fields) = &l.fields {
+                                return fields.to_string();
+                            }
                             format!(
                                 "{:>9.3} {:5} {:8} {}",
                                 l.time,
@@ -280,7 +283,11 @@ impl App {
                             .color(color),
                         )
                         .extend(),
-                    );
+                    )
+                    .on_hover_text(format!(
+                        "Timestamp: {} ms since Unix epoch",
+                        l.timestamp_unix_ms
+                    ));
                 }
             });
     }

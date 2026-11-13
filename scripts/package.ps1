@@ -37,6 +37,8 @@ try {
     Copy-Item "$($sdk.FullName)\bin\*.dll" $Dist -Force
     $ffmpeg = if ($env:FFMPEG) { $env:FFMPEG } else { "$($sdk.FullName)\bin\ffmpeg.exe" }
     Copy-Item $ffmpeg (Join-Path $Dist 'ffmpeg.exe') -Force
+    $ffprobe = if ($env:FFPROBE) { $env:FFPROBE } else { "$($sdk.FullName)\bin\ffprobe.exe" }
+    Copy-Item $ffprobe (Join-Path $Dist 'ffprobe.exe') -Force
     Copy-Item "$($sdk.FullName)\LICENSE" (Join-Path $Dist 'FFmpeg-LICENSE.txt') -Force
 
     $helperBuild = Join-Path $Cache 'anime4k-build'

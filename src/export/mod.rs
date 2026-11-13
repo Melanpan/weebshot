@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use anyhow::{Context as _, Result, bail};
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
@@ -442,6 +442,7 @@ pub enum JobEvent {
 }
 
 enum Work {
+    Still(ffmpeg::StillJob),
     SavePsd {
         recipe: Arc<crate::stitch::Recipe>,
         included: Vec<bool>,
@@ -465,13 +466,32 @@ struct Submission {
 pub struct Runner {
     tx: Sender<Submission>,
     pub events: Receiver<JobEvent>,
+    worker: thread::JoinHandle<()>,
 }
 
 impl Runner {
     pub fn new(tools: Tools, ctx: egui::Context) -> Self {
-        let (tx, rx) = unbounded::<Submission>();
+        Self::start(tools, Some(ctx))
+    }
+
+    pub fn headless(tools: Tools) -> Self {
+        Self::start(tools, None)
+    }
+
+    fn start(tools: Tools, ctx: Option<egui::Context>) -> Self {
+        let headless = ctx.is_none();
+        let repaint = move || {
+            if let Some(ctx) = &ctx {
+                ctx.request_repaint();
+            }
+        };
+        let (tx, rx) = if headless {
+            bounded::<Submission>(32)
+        } else {
+            unbounded::<Submission>()
+        };
         let (ev_tx, events) = unbounded();
-        thread::spawn(move || {
+        let worker = thread::spawn(move || {
             for sub in rx {
                 let report = |overall: f32, fraction: Option<f32>, stage: &'static str| {
                     let _ = ev_tx.send(JobEvent::Progress {
@@ -480,7 +500,7 @@ impl Runner {
                         overall,
                         stage,
                     });
-                    ctx.request_repaint();
+                    repaint();
                 };
                 if let Work::SavePsd {
                     recipe,
@@ -500,7 +520,7 @@ impl Runner {
                     .map(|()| None)
                     .map_err(|e| format!("{e:#}"));
                     let _ = ev_tx.send(JobEvent::Finished { id: sub.id, result });
-                    ctx.request_repaint();
+                    repaint();
                     continue;
                 }
                 let stitch_result = match &sub.job {
@@ -519,7 +539,7 @@ impl Runner {
                         &sub.cancel,
                         |f, s| report(f, Some(f), s),
                     )),
-                    Work::Export(_) | Work::SavePsd { .. } => None,
+                    Work::Export(_) | Work::Still(_) | Work::SavePsd { .. } => None,
                 };
                 if let Some(result) = stitch_result {
                     let result = result.map_err(|e| format!("{e:#}"));
@@ -535,7 +555,27 @@ impl Runner {
                         Err(e) => log::error("stitch", e),
                     }
                     let _ = ev_tx.send(JobEvent::Stitched { id: sub.id, result });
-                    ctx.request_repaint();
+                    repaint();
+                    continue;
+                }
+                if let Work::Still(job) = &sub.job {
+                    let result = (|| -> Result<()> {
+                        let scratch = Scratch::new(&std::env::temp_dir(), sub.id)?;
+                        let mut job = job.clone();
+                        SubSource::prepare(&mut job.subs, &scratch)?;
+                        let step = Step {
+                            tool: Tool::Ffmpeg,
+                            args: job.args(),
+                            label: "Screenshot",
+                            weight: 1.0,
+                            reports_progress: false,
+                        };
+                        run_steps(&tools, 1.0, &[step], &sub.cancel, report).with_context(|| if job.subs.is_some() {"Screenshot/subtitle rendering failed; verify FFmpeg has libass/subtitle support and the selected subtitle source is readable"}else{"Screenshot extraction failed"})
+                    })()
+                    .map(|()| None)
+                    .map_err(|e| format!("{e:#}"));
+                    let _ = ev_tx.send(JobEvent::Finished { id: sub.id, result });
+                    repaint();
                     continue;
                 }
                 let Work::Export(job) = &sub.job else {
@@ -566,10 +606,23 @@ impl Runner {
                     }
                 };
                 let _ = ev_tx.send(JobEvent::Finished { id: sub.id, result });
-                ctx.request_repaint();
+                repaint();
             }
         });
-        Self { tx, events }
+        Self { tx, events, worker }
+    }
+
+    pub fn shutdown(self) {
+        drop(self.tx);
+        let _ = self.worker.join();
+    }
+
+    pub fn submit_still(&self, id: u64, job: ffmpeg::StillJob, cancel: Arc<AtomicBool>) {
+        let _ = self.tx.send(Submission {
+            id,
+            job: Work::Still(job),
+            cancel,
+        });
     }
 
     pub fn submit_psd(

@@ -502,6 +502,39 @@ impl Player {
         self.tracks.iter().find(|t| t.kind == kind && t.id == id)
     }
 
+    /// Synchronous MCP selection updates the cached ID before another command
+    /// in the same GUI frame can snapshot subtitles/audio for an export.
+    pub fn select_track_checked(&mut self, kind: TrackKind, id: Option<i64>) -> Result<()> {
+        if kind == TrackKind::Sub {
+            self.hide_edited_subs();
+        }
+        let property = match kind {
+            TrackKind::Audio => "aid",
+            TrackKind::Sub => "sid",
+            TrackKind::Video => "vid",
+        };
+        let value = id.map(|id| id.to_string()).unwrap_or_else(|| "no".into());
+        self.mpv
+            .set_property(property, value.as_str())
+            .map_err(|e| anyhow!("Could not select media track: {e}"))?;
+        match kind {
+            TrackKind::Audio => self.aid = id,
+            TrackKind::Sub => self.sid = id,
+            TrackKind::Video => {}
+        }
+        Ok(())
+    }
+    pub fn add_sub_checked(&mut self, path: &Path) -> Result<()> {
+        self.hide_edited_subs();
+        self.add_sub(path)?;
+        self.tracks = self.read_tracks();
+        self.sid = self
+            .mpv
+            .get_property::<String>("sid")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        Ok(())
+    }
     pub fn select_track(&self, kind: TrackKind, id: Option<i64>) {
         let prop = match kind {
             TrackKind::Audio => "aid",

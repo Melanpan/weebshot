@@ -8,12 +8,13 @@ use crate::settings::{Step, StepUnit};
 use crate::sounds::Sound;
 use crate::theme::Theme;
 
-const PAGES: [(OptionsPage, &str, &str); 5] = [
+const PAGES: [(OptionsPage, &str, &str); 6] = [
     (OptionsPage::General, icon::FOLDER, "General"),
     (OptionsPage::Playback, icon::PLAY, "Playback"),
     (OptionsPage::Export, icon::EXPORT, "Export"),
     (OptionsPage::Appearance, icon::PALETTE, "Appearance"),
     (OptionsPage::Shortcuts, icon::KEYBOARD, "Shortcuts"),
+    (OptionsPage::Advanced, icon::KEYBOARD, "Advanced"),
 ];
 
 /// Amount + unit editor for a step setting.
@@ -92,6 +93,7 @@ impl App {
                         egui::ScrollArea::vertical()
                             .auto_shrink(false)
                             .show(ui, |ui| match self.ui.options_page {
+                                OptionsPage::Advanced => self.mcp_page(ui),
                                 OptionsPage::General => self.general_page(ui),
                                 OptionsPage::Playback => self.playback_page(ui),
                                 OptionsPage::Export => self.export_page(ui),

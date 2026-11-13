@@ -24,6 +24,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp target/release/weebshot "$app/Contents/MacOS/"
 cp "$brew_prefix/bin/gifsicle" "$app/Contents/MacOS/"
+cp "$brew_prefix/bin/ffprobe" "$app/Contents/MacOS/"
 if [[ -n "${FFMPEG:-}" ]]; then
     cp "$FFMPEG" "$app/Contents/MacOS/ffmpeg"
 else
@@ -74,7 +75,7 @@ PLIST
 
 # Copy every Homebrew library weebshot and gifsicle need into Frameworks and rewrite their paths
 # (ffmpeg is static).
-for bin in weebshot gifsicle weebshot-anime4k; do
+for bin in weebshot gifsicle ffprobe weebshot-anime4k; do
     dylibbundler -of -b -cd \
         -x "$app/Contents/MacOS/$bin" \
         -d "$app/Contents/Frameworks/" \

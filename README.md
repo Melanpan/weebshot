@@ -192,3 +192,14 @@ It's built on the shoulders of [mpv](https://mpv.io), [FFmpeg](https://ffmpeg.or
 [gifsicle](https://www.lcdf.org/gifsicle/), [egui](https://github.com/emilk/egui) and
 [Phosphor icons](https://phosphoricons.com); the release packages include mpv, FFmpeg, gifsicle and Anime4KCPP
 under their own licenses — see [THIRD-PARTY.md](THIRD-PARTY.md).
+
+### Optional automation
+
+Weebshot supports opt-in local MCP automation and display-free processing with
+`weebshot --headless --mcp`. To control an existing window, enable
+**Settings → Advanced → MCP** and launch `weebshot --mcp` from your MCP client.
+Use `video_contact_sheet` for timestamped overviews and `video_extract_frames` for
+up to 16 detailed frames returned directly to the client, without moving playback.
+`video_timeline_scenes` exposes approximate shot boundaries; `report_issue` records
+explicit agent diagnostics in the existing Logs system.
+See [MCP setup, tools, examples and limitations](docs/mcp.md).

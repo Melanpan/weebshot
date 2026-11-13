@@ -35,6 +35,9 @@ pub struct Line {
     pub level: Level,
     pub source: &'static str,
     pub text: String,
+    /// Native structured fields for diagnostic events (also rendered in text).
+    pub fields: Option<serde_json::Value>,
+    pub timestamp_unix_ms: u64,
 }
 
 struct Log {
@@ -73,6 +76,8 @@ pub fn log(level: Level, source: &'static str, text: impl Into<String>) {
         level,
         source,
         text,
+        fields: None,
+        timestamp_unix_ms: unix_millis(),
     });
     SEQUENCE.fetch_add(1, Ordering::Release);
 }
@@ -125,4 +130,104 @@ pub fn format_command(program: &std::path::Path, args: &[String]) -> String {
         .chain(args.iter().map(|a| quote(a)))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+enum EventRecord {
+    Line(String),
+    Flush(crossbeam_channel::Sender<()>),
+}
+static EVENT_SINK: OnceLock<crossbeam_channel::Sender<EventRecord>> = OnceLock::new();
+
+/// Bound shutdown latency even when an external stderr collector stops reading.
+pub fn flush_events() {
+    if let Some(sink) = EVENT_SINK.get() {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        if sink
+            .send_timeout(
+                EventRecord::Flush(tx),
+                std::time::Duration::from_millis(100),
+            )
+            .is_ok()
+        {
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(500));
+        }
+    }
+}
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Accept structured events into the same bounded Logs buffer. A single bounded
+/// stderr worker keeps reports off GUI/IPC threads and supports JSON collectors.
+pub fn structured_event(
+    level: Level,
+    source: &'static str,
+    event: &'static str,
+    mut fields: serde_json::Map<String, serde_json::Value>,
+) -> anyhow::Result<String> {
+    use serde_json::json;
+    static IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let sink = EVENT_SINK.get_or_init(|| {
+        let (tx, rx) = crossbeam_channel::bounded::<EventRecord>(32);
+        std::thread::spawn(move || {
+            use std::io::Write;
+            for event in rx {
+                match event {
+                    EventRecord::Line(line) => {
+                        let _ = writeln!(std::io::stderr().lock(), "{line}");
+                    }
+                    EventRecord::Flush(reply) => {
+                        let _ = reply.send(());
+                    }
+                }
+            }
+        });
+        tx
+    });
+    let timestamp = unix_millis();
+    let id = format!(
+        "{}-{}",
+        std::process::id(),
+        IDS.fetch_add(1, Ordering::Relaxed)
+    );
+    fields.insert("event".into(), json!(event));
+    fields.insert("source".into(), json!(source));
+    fields.insert(
+        "severity".into(),
+        json!(if level == Level::Warn {
+            "warning"
+        } else {
+            level.label()
+        }),
+    );
+    fields.insert("timestamp_unix_ms".into(), json!(timestamp));
+    fields.insert("report_id".into(), json!(id));
+    let fields = serde_json::Value::Object(fields);
+    let text = serde_json::to_string(&fields)?;
+    let store = log_store();
+    let mut lines = store
+        .lines
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Log buffer unavailable"))?;
+    sink.try_send(EventRecord::Line(text.clone()))
+        .map_err(|_| anyhow::anyhow!("Diagnostic log queue full (32); retry later"))?;
+    if lines.len() >= MAX_LINES {
+        lines.pop_front();
+    }
+    lines.push_back(Line {
+        time: store.start.elapsed().as_secs_f64(),
+        level,
+        source,
+        text,
+        fields: Some(fields),
+        timestamp_unix_ms: timestamp,
+    });
+    if level == Level::Error {
+        UNSEEN_ERRORS.fetch_add(1, Ordering::Relaxed);
+    }
+    SEQUENCE.fetch_add(1, Ordering::Release);
+    Ok(id)
 }
