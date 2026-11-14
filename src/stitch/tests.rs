@@ -2461,11 +2461,17 @@ fn other_regions_are_ordered_by_distance_and_need_travel() {
     motions.extend(std::iter::repeat_n(moving(8, 0), 4));
     let options = Options::default();
     assert_eq!(
-        other_regions(&motions, 0, &options, 8.0, (320, 180)),
+        other_regions(&motions, Some(0), &options, 8.0, (320, 180)),
         vec![(3, 7), (8, 12)]
     );
     assert_eq!(
-        other_regions(&motions, 12, &options, 8.0, (320, 180)),
+        other_regions(&motions, Some(12), &options, 8.0, (320, 180)),
         vec![(8, 12), (3, 7)]
+    );
+    // Without a playhead (inside a marked range) the pan that travels the
+    // larger share of the frame comes first: 24 of 180 rows beats 32 of 320 columns.
+    assert_eq!(
+        other_regions(&motions, None, &options, 8.0, (320, 180)),
+        vec![(3, 7), (8, 12)]
     );
 }

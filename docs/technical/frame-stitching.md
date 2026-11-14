@@ -64,7 +64,10 @@ frame of a clip whose camera is already rolling) would otherwise end it immediat
 If that region does not produce a stitch, up to three further regions in the window are
 attempted, nearest the playhead first. Only regions whose analysis travel reaches the
 minimum are considered, and each attempt passes the same checks. The error reported
-when all fail is the first one. Brief holds are allowed by default. A longer baseline of
+when all fail is the first one. A marked range is first attempted whole. If that fails,
+the same regions inside the range are attempted in order of decreasing travel, since the
+playhead says nothing about which part of a marked range matters, and the result is
+reported as a shortened range. Brief holds are allowed by default. A longer baseline of
 roughly half a second can detect slow motion when adjacent downscaled samples round to zero.
 Low detail, poor agreement and inconsistent direction can end the automatic region.
 Scene cuts are handled through these match signals. A marked range skips boundary discovery.

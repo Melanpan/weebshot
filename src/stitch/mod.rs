@@ -330,18 +330,18 @@ fn region(
     Ok((walk(true), walk(false)))
 }
 
-/// Every coherent pan in the window that travels far enough to stitch, nearest
-/// the seed first.
+/// Every coherent pan in the window that travels far enough to stitch: nearest
+/// the seed first, or by decreasing travel without one.
 fn other_regions(
     motions: &[Option<motion::Motion>],
-    seed: usize,
+    seed: Option<usize>,
     options: &Options,
     fps: f64,
     size: (u32, u32),
 ) -> Vec<(usize, usize)> {
-    let mut regions: Vec<(usize, usize)> = Vec::new();
+    let mut regions: Vec<((usize, usize), f32)> = Vec::new();
     for (i, m) in motions.iter().enumerate() {
-        if regions.last().is_some_and(|&(_, hi)| i < hi)
+        if regions.last().is_some_and(|&((_, hi), _)| i < hi)
             || !m.is_some_and(|m| m.reliable(&options.thresholds) && m.moving())
         {
             continue;
@@ -353,20 +353,22 @@ fn other_regions(
             .iter()
             .flatten()
             .fold((0, 0), |(x, y), m| (x + m.dx, y + m.dy));
-        if (dx.abs() as f32 / size.0 as f32).max(dy.abs() as f32 / size.1 as f32)
-            >= options.min_travel
-        {
-            regions.push((lo, hi));
+        let travel = (dx.abs() as f32 / size.0 as f32).max(dy.abs() as f32 / size.1 as f32);
+        if travel >= options.min_travel {
+            regions.push(((lo, hi), travel));
         }
     }
-    regions.sort_by_key(|&(lo, hi)| {
-        if seed < lo {
-            lo - seed
-        } else {
-            seed.saturating_sub(hi)
-        }
-    });
-    regions
+    match seed {
+        Some(seed) => regions.sort_by_key(|&((lo, hi), _)| {
+            if seed < lo {
+                lo - seed
+            } else {
+                seed.saturating_sub(hi)
+            }
+        }),
+        None => regions.sort_by(|a, b| b.1.total_cmp(&a.1)),
+    }
+    regions.into_iter().map(|(span, _)| span).collect()
 }
 
 fn positions(
@@ -519,6 +521,9 @@ pub fn run(
     // Automatic first follows the motion nearest the playhead. When that is
     // not a stitchable pan (a small movement before the real one, a pan that
     // starts a second later), try the other pans in the window, nearest first.
+    // A marked range is first taken whole; when that fails (two movements in
+    // different directions, a stretch that cannot be aligned), the pans inside
+    // it are tried, largest first, and the result reports the shortened range.
     let tried = std::cell::Cell::new(None);
     let mut skip: Vec<(f64, f64)> = Vec::new();
     let mut first_error = None;
@@ -540,12 +545,13 @@ pub fn run(
                 first_error.get_or_insert(error);
             }
         }
-        // A marked range has no alternatives, and an attempt that found no
-        // further pan ends the search.
+        // An attempt that found no further pan ends the search. The first
+        // attempt on a marked range covers all of it and records nothing, so
+        // the pans inside it are tried next.
         match tried.get() {
-            Some(span) if job.range.is_none() => skip.push(span),
-            _ if attempt > 0 || job.range.is_some() => break,
-            _ => {}
+            Some(span) => skip.push(span),
+            None if attempt > 0 => break,
+            None => {}
         }
     }
     let error = first_error.unwrap();
@@ -700,18 +706,20 @@ fn solve(
             }
         }
         let seed = (((job.playhead - start) * fps).round() as usize).min(frames.len() - 1);
-        let candidate = if job.range.is_some() {
-            Ok((0, frames.len() - 1))
-        } else if let Some(skip) = skip {
+        let candidate = if let Some(skip) = skip {
             let span =
                 |(lo, hi): (usize, usize)| (start + lo as f64 / fps, start + hi as f64 / fps);
-            other_regions(&discovery, seed, options, fps, size)
+            // Inside a marked range the playhead means nothing: take the pan
+            // that reveals the most first.
+            other_regions(&discovery, job.range.is_none().then_some(seed), options, fps, size)
                 .into_iter()
                 .find(|&r| {
                     let (a, b) = span(r);
                     !skip.iter().any(|&(lo, hi)| a < hi && lo < b)
                 })
                 .context("No coherent camera pan near the playhead. Try marking In and Out, then Stitch Selection.")
+        } else if job.range.is_some() {
+            Ok((0, frames.len() - 1))
         } else {
             region(&discovery, seed, options, fps)
         };
@@ -748,7 +756,7 @@ fn solve(
             other => other,
         };
         if let Ok((lo, hi)) = candidate
-            && job.range.is_none()
+            && (job.range.is_none() || skip.is_some())
             && hi > lo
         {
             tried.set(Some((start + lo as f64 / fps, start + hi as f64 / fps)));

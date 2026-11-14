@@ -165,6 +165,9 @@ search limit is reached, a warning explains that the pan may continue. Use a man
 marked range when discovery misses the desired section. If a marked range contains
 a cut, a hold or frames that cannot be matched, Weebshot stitches its longest
 coherent pan and the preview shows **Marked range shortened** with the covered times.
+The same happens when the range as a whole cannot be stitched, for example because
+it holds two movements in different directions: the pans inside it are tried,
+largest first.
 
 **Force a result** (off by default) changes what happens when every check above
 refuses. Instead of an error, Weebshot places the frames of the shot under the
