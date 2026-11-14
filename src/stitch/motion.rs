@@ -45,6 +45,8 @@ impl Motion {
     }
 }
 
+const MAX_GRID: usize = 256;
+
 /// Score only common pixels, spread over sixteen tiles. Discard the four worst
 /// tiles, but separately require broad agreement so a single moving object cannot win.
 fn residual(a: &GrayImage, b: &GrayImage, dx: i32, dy: i32, thresholds: &Thresholds) -> (f32, f32) {
@@ -59,10 +61,22 @@ fn residual(a: &GrayImage, b: &GrayImage, dx: i32, dy: i32, thresholds: &Thresho
     if x1 - x0 < 8 || y1 - y0 < 8 {
         return (255.0, 0.0);
     }
-    // Coordinates depend on overlap, not on the tile. Compute the 24 sample
+    // Coordinates depend on overlap, not on the tile. Compute the sample
     // columns/rows once per candidate instead of dividing for every pixel pair.
-    let xs: [i32; 24] = std::array::from_fn(|i| x0 + (x1 - x0 - 1) * i as i32 / 24);
-    let ys: [i32; 24] = std::array::from_fn(|i| y0 + (y1 - y0 - 1) * i as i32 / 24);
+    // Density follows the overlap (about one sample per 4 pixels, 24 to 256 per
+    // axis): a fixed 24-point grid spaced 80 pixels apart at 1080p mostly hits
+    // flat fills, leaving the sideways error surface nearly flat.
+    let count = |span: i32| ((span / 4).clamp(24, MAX_GRID as i32) / 4 * 4) as usize;
+    let (nx, ny) = (count(x1 - x0), count(y1 - y0));
+    let mut xs = [0i32; MAX_GRID];
+    let mut ys = [0i32; MAX_GRID];
+    for (i, x) in xs[..nx].iter_mut().enumerate() {
+        *x = x0 + (x1 - x0 - 1) * i as i32 / nx as i32;
+    }
+    for (i, y) in ys[..ny].iter_mut().enumerate() {
+        *y = y0 + (y1 - y0 - 1) * i as i32 / ny as i32;
+    }
+    let (tx_n, ty_n) = (nx / 4, ny / 4);
     let aa = a.as_raw();
     let bb = b.as_raw();
     let stride = w as usize;
@@ -70,14 +84,14 @@ fn residual(a: &GrayImage, b: &GrayImage, dx: i32, dy: i32, thresholds: &Thresho
     for ty in 0..4 {
         for tx in 0..4 {
             let mut sum = 0.0;
-            for &y in &ys[ty * 6..ty * 6 + 6] {
+            for &y in &ys[ty * ty_n..(ty + 1) * ty_n] {
                 let ar = (y + dy) as usize * stride;
                 let br = y as usize * stride;
-                for &x in &xs[tx * 6..tx * 6 + 6] {
+                for &x in &xs[tx * tx_n..(tx + 1) * tx_n] {
                     sum += (aa[ar + (x + dx) as usize] as f32 - bb[br + x as usize] as f32).abs();
                 }
             }
-            tiles[ty * 4 + tx] = sum / 36.0;
+            tiles[ty * 4 + tx] = sum / (tx_n * ty_n) as f32;
         }
     }
     let support = tiles.iter().filter(|&&v| v < thresholds.tile_error).count() as f32 / 16.0;

@@ -1,9 +1,9 @@
 //! Local camera-pan reconstruction, independent of egui and libmpv.
 mod compose;
 mod decode;
-mod foreground;
 mod layers;
 mod motion;
+mod planes;
 mod png;
 mod psd;
 #[cfg(test)]
@@ -29,6 +29,11 @@ const MAX_SAMPLES: usize = 1000;
 const MAX_SELECTED: usize = 96;
 const MAX_PIXELS: u64 = 32_000_000;
 const MAX_EDGE: u32 = 16384;
+/// Edge agreement at which the oldest overlapping reference is accepted
+/// without comparing newer ones.
+const STRONG_EDGE_AGREEMENT: f32 = 0.7;
+/// Seconds searched on each side of the playhead before widening.
+const INITIAL_SEARCH: f64 = 6.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,8 +60,8 @@ impl Method {
             Self::Automatic => "Automatic",
             Self::Translation => "Single translation",
             Self::TwoVerticalLayers => "Two vertical layers",
-            Self::ShiftAndScale => "Shift and scale",
-            Self::LayeredMotion => "Layered motion (experimental)",
+            Self::ShiftAndScale => "Shift, scale and rotation",
+            Self::LayeredMotion => "Layered (two planes)",
         }
     }
 }
@@ -66,6 +71,8 @@ impl Method {
 pub struct Options {
     pub method: Method,
     pub layer_divider_percent: Option<u32>,
+    /// Unused since layered stitching keeps both planes; kept so saved
+    /// settings and MCP calls that still send it remain valid.
     pub prefer_background: bool,
     pub sampling_fps: f64,
     pub search_seconds: f64,
@@ -78,7 +85,38 @@ pub struct Options {
     pub native_thresholds: motion::Thresholds,
     pub direction_tolerance: f32,
     pub min_edge_agreement: f32,
+    /// Engine tuning the advanced thresholds above were saved with. They are
+    /// hidden from the UI, so settings files keep whatever defaults existed
+    /// when first written; values from an older tuning are replaced by the
+    /// current defaults. Missing in older files, hence zero.
+    #[serde(default)]
+    pub tuning: u32,
 }
+
+/// Bump when advanced threshold defaults change so saved copies are refreshed.
+pub const TUNING: u32 = 1;
+
+impl Options {
+    /// These options with stale advanced thresholds replaced by current defaults.
+    /// Visible settings are always honoured.
+    pub fn current(&self) -> Self {
+        if self.tuning >= TUNING {
+            return self.clone();
+        }
+        let defaults = Self::default();
+        Self {
+            pause_seconds: defaults.pause_seconds,
+            min_travel: defaults.min_travel,
+            thresholds: defaults.thresholds,
+            native_thresholds: defaults.native_thresholds,
+            direction_tolerance: defaults.direction_tolerance,
+            min_edge_agreement: defaults.min_edge_agreement,
+            tuning: TUNING,
+            ..self.clone()
+        }
+    }
+}
+
 impl Default for Options {
     fn default() -> Self {
         Self {
@@ -98,7 +136,11 @@ impl Default for Options {
                 ..Default::default()
             },
             direction_tolerance: 0.65,
-            min_edge_agreement: 0.7,
+            // Measured on broadcast anime: pose changes and parallax score
+            // below 0.2, while coherent pans range from about 0.45 upward
+            // as characters animate between references.
+            min_edge_agreement: 0.4,
+            tuning: TUNING,
         }
     }
 }
@@ -131,6 +173,20 @@ pub struct FrameChoice {
     position: Position,
     secondary: Option<Position>,
     scale: f32,
+    /// Full similarity pose for Shift, scale and rotation; `None` elsewhere.
+    pose: Option<zoom::Transform>,
+    /// Foreground mask at tracking resolution for the layered method.
+    layer_mask: Option<Arc<GrayImage>>,
+}
+
+impl FrameChoice {
+    /// Canvas size of this frame after any scaling or rotation.
+    fn extent(&self, native: (u32, u32)) -> (u32, u32) {
+        match self.pose {
+            Some(pose) => pose.placement(native).1,
+            None => zoom::frame_size(native, self.scale),
+        }
+    }
 }
 
 /// Retain only small thumbnails and solved positions, never native frame caches.
@@ -146,6 +202,8 @@ pub struct Recipe {
     confidence: f32,
     omitted: usize,
     truncated: bool,
+    /// The marked In/Out range had to be shortened to a coherent pan.
+    trimmed: bool,
     split: Option<u32>,
     method: Method,
 }
@@ -162,6 +220,7 @@ pub struct Output {
     pub method: Method,
     pub omitted_frames: usize,
     pub search_limited: bool,
+    pub range_trimmed: bool,
     pub range: (f64, f64),
     pub elapsed: f32,
     pub recipe: Arc<Recipe>,
@@ -310,6 +369,39 @@ fn select(positions: &[Position], size: (u32, u32), options: &Options) -> Vec<us
     selected
 }
 
+/// A marked range is authoritative about where to look, not a promise that
+/// every pair matches. Keep the run of reliable pairs that reveals the most.
+fn best_segment(
+    motions: &[Option<motion::Motion>],
+    size: (u32, u32),
+    thresholds: &motion::Thresholds,
+) -> Option<(usize, usize)> {
+    let mut best: Option<((usize, usize), f32)> = None;
+    let mut start = 0;
+    for end in 0..=motions.len() {
+        let reliable = motions
+            .get(end)
+            .is_some_and(|m| m.is_some_and(|m| m.reliable(thresholds)));
+        if reliable {
+            continue;
+        }
+        // A lone matching pair is more often two shots that happen to agree
+        // on flat fills than a pan; require at least two consecutive pairs.
+        if end >= start + 2 {
+            let (dx, dy) = motions[start..end]
+                .iter()
+                .flatten()
+                .fold((0, 0), |(x, y), m| (x + m.dx, y + m.dy));
+            let travel = (dx.abs() as f32 / size.0 as f32).max(dy.abs() as f32 / size.1 as f32);
+            if best.is_none_or(|(_, t)| travel > t) {
+                best = Some(((start, end), travel));
+            }
+        }
+        start = end + 1;
+    }
+    best.map(|(span, _)| span)
+}
+
 /// Pick one connected, consistently aligned sequence. Rank by revealed area,
 /// rather than frame count, so a long stationary tail cannot beat a real pan.
 fn best_component(
@@ -373,12 +465,23 @@ pub fn run(
     if !job.duration.is_finite() || job.duration <= 0.0 || !job.playhead.is_finite() {
         bail!("Video duration is unavailable");
     }
-    let options = &job.options;
+    let options = &job.options.current();
     let search = options.search_seconds.clamp(1.0, 30.0);
-    let (start, end) = job.range.unwrap_or((
-        (job.playhead - search).max(0.0),
-        (job.playhead + search).min(job.duration),
-    ));
+    let window = |reach: f64| {
+        job.range.unwrap_or((
+            (job.playhead - reach).max(0.0),
+            (job.playhead + reach).min(job.duration),
+        ))
+    };
+    // Most pans are short. Discover within a few seconds first and widen to the
+    // configured search limit only when the pan reaches that smaller window's
+    // edge; this avoids decoding up to 30 seconds of unrelated shots.
+    let mut reach = if options.method == Method::TwoVerticalLayers {
+        search
+    } else {
+        search.min(INITIAL_SEARCH)
+    };
+    let (mut start, mut end) = window(reach);
     if !start.is_finite()
         || !end.is_finite()
         || start < 0.0
@@ -388,10 +491,6 @@ pub fn run(
     {
         bail!("Choose a valid In/Out range of at most 60 seconds");
     }
-    let experimental = options.method == Method::LayeredMotion;
-    if experimental && job.range.is_none() {
-        bail!("Mark In and Out around one vertical pan to use Layered motion.");
-    }
     let initial_fps = options
         .sampling_fps
         .clamp(2.0, 16.0)
@@ -400,12 +499,12 @@ pub fn run(
     let (first, aspect) = decode::frame(ffmpeg, &job.input, start, cancel)?;
     let native = first.dimensions();
     drop(first);
-    let scale = if experimental { 640.0 } else { 320.0 } / native.0.max(native.1) as f64;
+    let scale = 320.0 / native.0.max(native.1) as f64;
     let size = (
         (native.0 as f64 * scale).round().max(24.0) as u32,
         (native.1 as f64 * scale).round().max(24.0) as u32,
     );
-    let mut fps = if experimental { 2.0 } else { initial_fps };
+    let mut fps = initial_fps;
     let (frames, motions, candidate) = loop {
         let mut frames = Vec::new();
         decode::samples(ffmpeg, &job.input, start, end, fps, size, cancel, |f| {
@@ -422,10 +521,9 @@ pub fn run(
         if frames.len() < 2 {
             bail!("The range is too short to stitch");
         }
-        if matches!(
-            options.method,
-            Method::TwoVerticalLayers | Method::ShiftAndScale | Method::LayeredMotion
-        ) {
+        // Shift, scale and rotation reuses translation discovery below to pick
+        // the sampling rate and the pan's extent.
+        if matches!(options.method, Method::TwoVerticalLayers) {
             break (frames, Vec::new(), None);
         }
         let mut motions = Vec::new();
@@ -480,8 +578,27 @@ pub fn run(
             report(0.0, "Retrying with closer frames");
             continue;
         }
+        let at_edge = candidate.as_ref().is_ok_and(|&(lo, hi)| {
+            (lo == 0 && start > 0.001) || (hi + 1 == frames.len() && end < job.duration - 0.001)
+        });
+        if job.range.is_none() && at_edge && reach < search {
+            reach = search;
+            (start, end) = window(reach);
+            report(0.0, "Extending the search");
+            continue;
+        }
+        // An explicit range that still contains a cut or unmatched frames
+        // keeps its longest coherent run; the preview reports the shortening.
+        let candidate = match candidate {
+            Ok(_) if job.range.is_some() && bad => {
+                Ok(best_segment(&motions, size, &options.thresholds)
+                    .unwrap_or((0, frames.len() - 1)))
+            }
+            other => other,
+        };
         break (frames, motions, Some(candidate));
     };
+    let analysed = frames.len();
     let base_recipe = || Recipe {
         frames: Vec::new(),
         input: job.input.clone(),
@@ -493,6 +610,7 @@ pub fn run(
         confidence: 1.0,
         omitted: 0,
         truncated: job.range.is_none() && (start > 0.001 || end < job.duration - 0.001),
+        trimmed: false,
         split: None,
         method: Method::Translation,
     };
@@ -514,27 +632,107 @@ pub fn run(
             .map(compose_recipe)
             .transpose()
     };
+    // Automatic's last resort: a single plane that also rolls or zooms. Only the
+    // discovered pan (or the marked range) is analysed so cuts outside it cannot
+    // break the chain of pairwise transforms.
+    let span = candidate
+        .as_ref()
+        .and_then(|c| c.as_ref().ok())
+        .copied()
+        .filter(|(lo, hi)| hi > lo);
+    // Fast rolls and zooms change too much between coarse samples, and the
+    // translation span ends where the roll begins. Re-sample the span plus one
+    // coarse sample on each side, up to the source rate, and let the matcher
+    // extend into those margins while pairs still align.
+    let similarity = |(lo, hi): (usize, usize)| -> Result<Output> {
+        let first = lo.saturating_sub(1);
+        let last = (hi + 1).min(frames.len() - 1);
+        let t0 = start + first as f64 / fps;
+        let t1 = (start + (last as f64 + 0.5) / fps).min(end);
+        let dense = (fps * 3.0)
+            .min(job.source_fps)
+            .min(24.0)
+            .min((MAX_SAMPLES - 2) as f64 / (t1 - t0));
+        // Whether the analysed slice spans the whole marked range.
+        let covers = first == 0 && last == frames.len() - 1;
+        if dense <= fps + 0.1 {
+            let mut recipe = zoom::recipe(
+                &frames[first..=last],
+                (lo - first, hi - first),
+                first,
+                base_recipe(),
+                ffmpeg,
+                options,
+                cancel,
+                &report,
+            )?;
+            recipe.trimmed = job.range.is_some() && (!covers || recipe.trimmed);
+            return compose_recipe(recipe);
+        }
+        report(0.15, "Retrying with closer frames");
+        let mut fine = Vec::new();
+        decode::samples(ffmpeg, &job.input, t0, t1, dense, size, cancel, |f| {
+            fine.push(f);
+            Ok(())
+        })?;
+        if fine.len() < 2 {
+            bail!(zoom::ALIGNMENT_ERROR);
+        }
+        let to_fine = |coarse: usize| (coarse - first) as f64 / fps * dense;
+        let core_hi = (to_fine(hi).floor() as usize).min(fine.len() - 1);
+        let core = ((to_fine(lo).ceil() as usize).min(core_hi), core_hi);
+        let recipe = Recipe {
+            start: t0,
+            end: t1,
+            fps: dense,
+            ..base_recipe()
+        };
+        let mut recipe = zoom::recipe(&fine, core, 0, recipe, ffmpeg, options, cancel, &report)?;
+        recipe.trimmed = job.range.is_some() && (!covers || recipe.trimmed);
+        compose_recipe(recipe)
+    };
+    let fallback = || -> Result<Option<Output>> {
+        if let Some(output) = layered()? {
+            return Ok(Some(output));
+        }
+        let Some(span) = span.filter(|_| options.method == Method::Automatic) else {
+            return Ok(None);
+        };
+        report(0.7, "Checking for camera roll and zoom");
+        match similarity(span) {
+            Ok(output) => Ok(Some(output)),
+            Err(error) if cancel.load(Ordering::Relaxed) => Err(error),
+            Err(error) => {
+                crate::log::log(
+                    crate::log::Level::Debug,
+                    "stitch",
+                    format!("shift, scale and rotation fallback: {error:#}"),
+                );
+                Ok(None)
+            }
+        }
+    };
+    if options.method == Method::ShiftAndScale {
+        return similarity(span.unwrap_or((0, frames.len() - 1)));
+    }
+    if options.method == Method::LayeredMotion {
+        // The translation span finds the pan; layer tracking samples it again
+        // at a higher resolution. Include one coarse sample on each side.
+        let (lo, hi) = span.unwrap_or((0, frames.len() - 1));
+        let t0 = start + lo.saturating_sub(1) as f64 / fps;
+        let t1 = (start + (hi + 1) as f64 / fps).min(end);
+        return compose_recipe(planes::recipe(
+            ffmpeg,
+            t0,
+            t1,
+            job.source_fps,
+            base_recipe(),
+            options,
+            cancel,
+            &report,
+        )?);
+    }
     let Some(candidate) = candidate else {
-        if experimental {
-            return compose_recipe(foreground::recipe(
-                &frames,
-                base_recipe(),
-                ffmpeg,
-                options,
-                cancel,
-                &report,
-            )?);
-        }
-        if options.method == Method::ShiftAndScale {
-            return compose_recipe(zoom::recipe(
-                &frames,
-                base_recipe(),
-                ffmpeg,
-                options,
-                cancel,
-                &report,
-            )?);
-        }
         return layered()?.context(layers::LAYER_ALIGNMENT_ERROR);
     };
     let analysis = candidate.and_then(|(lo, hi)| {
@@ -554,7 +752,7 @@ pub fn run(
     });
     let (lo, hi, positions) = match analysis {
         Ok(analysis) => analysis,
-        Err(error) => return layered()?.ok_or(error),
+        Err(error) => return fallback()?.ok_or(error),
     };
     // Manual selections must also be coherent: never silently stitch a reversal.
     let mut reference = None;
@@ -565,7 +763,7 @@ pub fn run(
         if m.moving() {
             let r = reference.get_or_insert(m);
             if m.dx * r.dx + m.dy * r.dy < 0 {
-                return layered()?
+                return fallback()?
                     .context("Pan changes direction. Select one continuous direction.");
             }
         }
@@ -616,6 +814,10 @@ pub fn run(
             let mut pos = Position::default();
             let mut quality = 1.0f32;
             let mut matched = n == 0;
+            // The oldest reference limits drift, so a strong match there wins
+            // at once. Otherwise keep the best-agreeing acceptable reference:
+            // an old one is more likely to differ by animation.
+            let mut weaker: Option<(Position, f32, f32)> = None;
             for (anchor, a) in &anchors {
                 check_cancel(cancel)?;
                 // Compare analysis positions in the same coordinate system. A
@@ -638,7 +840,8 @@ pub fn run(
                     (sx.max(sy) * 10.0).ceil().clamp(8.0, 96.0) as i32,
                     &options.native_thresholds,
                 );
-                let edge_agreement = if m.reliable(&options.native_thresholds) {
+                let reliable = m.reliable(&options.native_thresholds);
+                let edge_agreement = if reliable {
                     a.edge_agreement(&prepared, m)
                 } else {
                     0.0
@@ -650,14 +853,25 @@ pub fn run(
                         "frame {n}, reference {anchor}, estimate {delta:?}, native {m:?}, edges {edge_agreement:.3}"
                     ),
                 );
-                if m.reliable(&options.native_thresholds)
-                    && edge_agreement >= options.min_edge_agreement
-                {
-                    pos = native_positions[*anchor].plus(m);
-                    quality = (1.0 - m.error / 36.0) * m.support;
-                    matched = true;
-                    break;
+                if reliable && edge_agreement >= options.min_edge_agreement {
+                    let found = (
+                        native_positions[*anchor].plus(m),
+                        (1.0 - m.error / 36.0) * m.support,
+                        edge_agreement,
+                    );
+                    if edge_agreement >= STRONG_EDGE_AGREEMENT.max(options.min_edge_agreement) {
+                        (pos, quality, _) = found;
+                        matched = true;
+                        break;
+                    }
+                    if weaker.is_none_or(|w| edge_agreement > w.2) {
+                        weaker = Some(found);
+                    }
                 }
+            }
+            if !matched && let Some(found) = weaker {
+                (pos, quality, _) = found;
+                matched = true;
             }
             if !matched {
                 // Pose changes can invalidate an early frame while leaving a
@@ -685,7 +899,7 @@ pub fn run(
         } else {
             layers::ALIGNMENT_ERROR
         };
-        return layered()?.context(error);
+        return fallback()?.context(error);
     };
     let keep: Vec<_> = (0..selected.len()).filter(|&n| groups[n] == best).collect();
     drop(frames);
@@ -700,6 +914,8 @@ pub fn run(
                 position: native_positions[n],
                 secondary: None,
                 scale: 1.0,
+                pose: None,
+                layer_mask: None,
             })
             .collect(),
         input: job.input.clone(),
@@ -712,6 +928,7 @@ pub fn run(
         omitted: original_count - keep.len(),
         truncated: job.range.is_none()
             && ((lo == 0 && start > 0.001) || (hi == motions.len() && end < job.duration - 0.001)),
+        trimmed: job.range.is_some() && (lo > 0 || hi + 1 < analysed),
         split: None,
         method: Method::Translation,
     });
@@ -748,14 +965,14 @@ fn compose_frames(
     cancel: &AtomicBool,
     report: &impl Fn(f32, &'static str),
 ) -> Result<(RgbaImage, Vec<psd::Source>)> {
+    if recipe.method == Method::LayeredMotion {
+        return planes::compose(ffmpeg, recipe, selected, retain_layers, cancel, report);
+    }
     let native_positions: Vec<_> = selected.iter().map(|frame| frame.position).collect();
     let indices: Vec<_> = selected.iter().map(|frame| frame.sample).collect();
     let native = recipe.native;
-    let scaled = matches!(recipe.method, Method::LayeredMotion | Method::ShiftAndScale);
-    let frame_sizes: Vec<_> = selected
-        .iter()
-        .map(|frame| zoom::frame_size(native, frame.scale))
-        .collect();
+    let scaled = recipe.method == Method::ShiftAndScale;
+    let frame_sizes: Vec<_> = selected.iter().map(|f| f.extent(native)).collect();
     report(0.0, "Composing selected frames");
     let mut tracks = vec![(0, native.0, native_positions)];
     if let Some(split) = recipe.split {
@@ -834,8 +1051,14 @@ fn compose_frames(
                 let p = positions[n];
                 let offset = ((p.x - min.x) as u32, (p.y - min.y) as u32);
                 let transformed;
+                let mut mask = None;
                 let frame = if recipe.split.is_some() {
                     transformed = imageops::crop_imm(&rgb, *x, 0, *width, native.1).to_image();
+                    &transformed
+                } else if let Some(pose) = selected[n].pose.filter(|p| p.rotated()) {
+                    let (warped, coverage) = zoom::warp(&rgb, pose, cancel)?;
+                    transformed = warped;
+                    mask = Some(coverage);
                     &transformed
                 } else if scaled && frame_sizes[n] != native {
                     let (width, height) = frame_sizes[n];
@@ -844,7 +1067,7 @@ fn compose_frames(
                 } else {
                     &rgb
                 };
-                composer.push(frame, offset, cancel)?;
+                composer.push(frame, mask.as_ref(), offset, cancel)?;
                 if retain_layers {
                     let origin = if recipe.split.is_some() {
                         (*x as i32, p.y - top)
@@ -853,6 +1076,7 @@ fn compose_frames(
                     };
                     layers.push(psd::Source::new(
                         frame,
+                        mask.as_ref(),
                         plane,
                         n,
                         origin,
@@ -923,11 +1147,8 @@ pub fn recompose(
     let (mut dx, mut dy) = native_positions.last().unwrap().delta(native_positions[0]);
     let native = recipe.native;
     let experimental = recipe.method == Method::LayeredMotion;
-    let scaled = experimental || recipe.method == Method::ShiftAndScale;
-    let frame_sizes: Vec<_> = selected
-        .iter()
-        .map(|frame| zoom::frame_size(native, frame.scale))
-        .collect();
+    let scaled = recipe.method == Method::ShiftAndScale;
+    let frame_sizes: Vec<_> = selected.iter().map(|f| f.extent(native)).collect();
     if scaled {
         let first = frame_sizes[0];
         let last = frame_sizes.last().unwrap();
@@ -964,6 +1185,7 @@ pub fn recompose(
         "Diagonal"
     };
     let truncated = recipe.truncated;
+    let trimmed = recipe.trimmed && recipe.omitted == 0;
     let omitted = recipe.omitted;
     let excluded = recipe.frames.len() - selected.len();
     let warning = format!(
@@ -979,9 +1201,14 @@ pub fn recompose(
             String::new()
         },
         if truncated {
-            "Search limit reached; the pan may continue. "
+            "Search limit reached; the pan may continue. ".to_string()
+        } else if trimmed {
+            format!(
+                "Part of the marked range contains a cut, a pose change or frames that could not be matched; the result covers {:.2}–{:.2}s. ",
+                output_range.0, output_range.1
+            )
         } else {
-            ""
+            String::new()
         },
         if excluded > 0 {
             format!(
@@ -994,7 +1221,9 @@ pub fn recompose(
         if recipe.split.is_some() {
             "Two vertical layers were aligned separately and cropped to their shared height. Inspect the divider and any animation before saving."
         } else if experimental {
-            "Experimental layered motion aligns the prioritized artwork. Other layers can show visible seams, and edges may be transparent. Inspect the preview before saving."
+            "The background and the foreground layer were stitched separately; the foreground is shown as it was at the middle frame. Scenes with more than two depths, and parts of a character that only appear in other poses, can show breaks. Inspect outlines before saving."
+        } else if selected.iter().any(|f| f.pose.is_some_and(|p| p.rotated())) {
+            "Rotation and scale correction resample frames into the first frame's orientation. Inspect the preview for moving layers, seams and transparent edges."
         } else if scaled {
             "Scale correction resamples frames. Inspect the preview for moving layers, seams and transparent edges."
         } else {
@@ -1014,6 +1243,7 @@ pub fn recompose(
         method: recipe.method,
         omitted_frames: omitted,
         search_limited: truncated,
+        range_trimmed: trimmed,
         range: output_range,
         elapsed: started.elapsed().as_secs_f32(),
         recipe,

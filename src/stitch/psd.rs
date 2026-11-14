@@ -30,8 +30,11 @@ pub(super) struct Source {
 }
 
 impl Source {
+    /// `coverage` marks the pixels of a warped frame that came from the source;
+    /// the rest of its bounding box is transparent in the layer.
     pub fn new(
         rgb: &RgbImage,
+        coverage: Option<&GrayImage>,
         plane: usize,
         frame: usize,
         origin: (i32, i32),
@@ -40,8 +43,9 @@ impl Source {
     ) -> Self {
         let (width, height) = rgb.dimensions();
         let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
-        for pixel in rgb.as_raw().as_chunks::<3>().0 {
-            pixels.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+        for (i, pixel) in rgb.as_raw().as_chunks::<3>().0.iter().enumerate() {
+            let alpha = coverage.map_or(255, |c| c.as_raw()[i]);
+            pixels.extend_from_slice(&[pixel[0], pixel[1], pixel[2], alpha]);
         }
         let (left, top) = (f64::from(origin.0), f64::from(origin.1));
         let name = format!("Frame {:02} - {:.3}s", frame + 1, time);

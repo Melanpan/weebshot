@@ -99,26 +99,32 @@ available in **Options → Export → Auto Stitch**.
 | --- | --- |
 | Stitch method | Automatic |
 | Frame spacing | 8% of a frame in camera travel |
-| Analysis rate | 8 frames/second, adaptive in Automatic and Single translation |
-| Search in each direction | 15 seconds |
+| Analysis rate | 8 frames/second, adaptive except for Two vertical layers |
+| Search in each direction | 15 seconds (6 seconds first, widened when the pan reaches that limit) |
 | Allow short pauses | Enabled (up to 0.75 seconds) |
 
-**Automatic** tries single translation first and can fall back to two vertical
-layers if ordinary alignment fails. **Single translation** uses one shift per
+**Automatic** tries single translation first. If ordinary alignment fails, it can
+fall back to two vertical layers, then to shift, scale and rotation. **Single translation** uses one shift per
 frame for artwork that moves together. **Two vertical layers** aligns the left
 and right sides independently across the whole search window or marked range.
 Use a tight In/Out range and, if the split is visible in the artwork, set the
 divider as a percentage from the left edge. Leave the divider automatic to try
-the midpoint and thirds. **Shift and scale** is for artwork that pans and zooms
-together. Use In/Out around a single shot. This method scales frames into the
-first frame's coordinate system, so the exported image includes resampled pixels.
-**Layered motion (experimental)** is for vertical pans where overlapping artwork
-moves at different speeds. It requires an In/Out range. Choose **Foreground** to
-favor faster-moving artwork such as characters, or **Background** to favor the
-slower motion. Adjust **Frame spacing** to change the time between selected
-frames, then choose **Retry**. The preview can contain visible seams in
-other layers and transparent edges. Use **Save PSD…** to adjust the joins by hand.
-The preview's **Details** menu shows the method used.
+the midpoint and thirds. **Shift, scale and rotation** is for artwork that pans
+while the camera zooms or rolls (tilts sideways). It finds the pan the same way as
+Automatic, or uses your In/Out range. Frames are scaled and rotated into the first
+frame's orientation, so the exported image includes resampled pixels and can have
+transparent, stepped edges where rotated frames do not overlap.
+**Layered (two planes)** is for a character that pans at a different speed from
+the scenery behind it, in any direction. It finds the pan like Automatic, or uses
+your In/Out range. The background and the character are stitched separately,
+then the character is placed as it was at the middle of the pan, so areas hidden
+behind it are filled in from other frames. A face or hand that animates comes
+from a single moment. Parts of the character that only appear in other frames
+show the pose from those frames. Crowds and scenes with more than two depths can
+look worse than with Automatic; the method reports when it finds only one
+motion. **Save PSD…** puts each frame's background and character on separate
+layers, with the character layers on top. The preview's **Details** menu shows
+the method used.
 
 Lower **Frame spacing** to include more source frames and increase overlap
 between successive selections. Raise it to process fewer frames when there is
@@ -137,8 +143,9 @@ regions that pan vertically at different speeds. The preview warns when this is
 used and shows the height covered by both regions. Inspect the join before saving.
 Use In/Out marks around the pan if the automatic search window includes other shots.
 
-Shift and scale supports a uniform zoom on one plane. Rotation, perspective
-changes, and automatic separation of overlapping silhouettes remain unsupported.
+Shift, scale and rotation supports a uniform zoom and camera roll of up to about
+20° between compared frames, on one plane. Perspective changes and automatic
+separation of overlapping silhouettes remain unsupported.
 Confidence measures agreement with the selected motion model. Inspect faces, line art, and overlaps before saving.
 Pixels in overlaps come from individual source frames, without repeated averaging.
 Overlap boundaries favour matching areas and avoid connected moving regions where
@@ -153,14 +160,15 @@ actual result, including for an In/Out selection; it never searches outside your
 selection. Automatic discovery ends at cuts, incompatible motion or long holds;
 short pauses are allowed. If a
 search limit is reached, a warning explains that the pan may continue. Use a manually
-marked range when discovery misses the desired section. An explicit range containing
-a cut is rejected rather than silently shortened.
+marked range when discovery misses the desired section. If a marked range contains
+a cut, a hold or frames that cannot be matched, Weebshot stitches its longest
+coherent pan and the preview shows **Marked range shortened** with the covered times.
 
 Limits: a selection of 60 seconds, 1,000 analysis samples, 96 selected source frames,
 16 megapixels per source frame, and a 32 megapixel output with at most 16,384 pixels
 on either edge. A decoder invocation times out after 120 seconds without output. Shorter ranges
 reduce processing time and memory use. Analysis is downscaled. Composition uses source pixels for translation-only
-methods and resamples frames for Shift and scale. FFmpeg applies source orientation. Non-square source pixels
+methods and resamples frames for Shift, scale and rotation. FFmpeg applies source orientation. Non-square source pixels
 are displayed at their source aspect ratio and saved with PNG pixel aspect metadata;
 some image viewers ignore this metadata. HDR colour fidelity is not supported in
 this initial version.

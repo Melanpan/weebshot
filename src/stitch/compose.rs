@@ -2,7 +2,7 @@
 //! Seam search is bounded to a small grid; final pixels are never resized/blended.
 use super::check_cancel;
 use anyhow::{Result, bail};
-use image::{RgbImage, RgbaImage};
+use image::{GrayImage, RgbImage, RgbaImage};
 use std::sync::atomic::AtomicBool;
 
 #[derive(Clone, Copy)]
@@ -64,9 +64,12 @@ impl Composer {
         self.canvas
     }
 
+    /// `mask` limits a warped frame to the pixels it actually covers; zero
+    /// entries are neither drawn nor used to choose the seam.
     pub fn push(
         &mut self,
         frame: &RgbImage,
+        mask: Option<&GrayImage>,
         offset: (u32, u32),
         cancel: &AtomicBool,
     ) -> Result<()> {
@@ -104,13 +107,16 @@ impl Composer {
             bail!("Selected frames do not overlap. Include an intermediate frame.");
         }
         let seam = overlap
-            .map(|r| self.seam(frame, offset, r, vertical, cancel))
+            .map(|r| self.seam(frame, mask, offset, r, vertical, cancel))
             .transpose()?;
         for y in 0..frame.height() {
             if y % 32 == 0 {
                 check_cancel(cancel)?;
             }
             for x in 0..frame.width() {
+                if mask.is_some_and(|m| m.get_pixel(x, y)[0] == 0) {
+                    continue;
+                }
                 let (cx, cy) = (offset.0 + x, offset.1 + y);
                 let old = self.canvas.get_pixel(cx, cy);
                 let replace = if old[3] == 0 {
@@ -148,6 +154,7 @@ impl Composer {
     fn seam(
         &self,
         frame: &RgbImage,
+        mask: Option<&GrayImage>,
         offset: (u32, u32),
         r: Rect,
         vertical: bool,
@@ -182,10 +189,11 @@ impl Composer {
                             (r.x0 + v, r.y0 + u)
                         };
                         let a = self.canvas.get_pixel(x, y);
-                        if a[3] == 0 {
+                        let (fx, fy) = (x - offset.0, y - offset.1);
+                        if a[3] == 0 || mask.is_some_and(|m| m.get_pixel(fx, fy)[0] == 0) {
                             continue;
                         }
-                        let b = frame.get_pixel(x - offset.0, y - offset.1);
+                        let b = frame.get_pixel(fx, fy);
                         for c in 0..3 {
                             let d = (a[c].abs_diff(b[c]) as f32 - 2.0).max(0.0);
                             error += d + d * d / 32.0;

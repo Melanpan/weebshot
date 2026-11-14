@@ -61,7 +61,9 @@ Turn off *Hardware decoding* in *Options → Playback*.
 ## Auto Stitch fails or gives a shorter result
 
 Use one continuous camera pan with stable artwork. Cuts, large pose changes, low
-detail, zooms, rotation, and parallax can prevent reliable alignment. Try marking
+detail and parallax can prevent reliable alignment. Automatic tries zoom and camera
+roll after ordinary alignment fails; choose **Shift, scale and rotation** in the
+stitch settings to use it directly. Try marking
 a shorter In/Out range and choosing **Stitch Selection**. If only part of the pan
 can be aligned, the preview warns about omitted frames and shows the actual output
 range. Inspect the result before saving.

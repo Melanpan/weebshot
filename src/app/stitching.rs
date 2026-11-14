@@ -181,7 +181,9 @@ impl State {
             chip(ui,"PNG",p.fg_dim).on_hover_text("Full-resolution PNG export");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                 if out.method == crate::stitch::Method::LayeredMotion {
-                    chip(ui, "Experimental", p.warn);
+                    chip(ui, "Experimental", p.warn).on_hover_text(
+                        "Two-layer stitch: the background and the foreground were stitched separately. Check outlines and scenes with more than two depths.",
+                    );
                     return;
                 }
                 let color=if out.confidence>=0.9 {p.ok}else{p.warn};
@@ -223,8 +225,9 @@ impl State {
             );
         });
         ui.add_space(6.0);
-        if out.omitted_frames > 0 || out.search_limited {
+        if out.omitted_frames > 0 || out.search_limited || out.range_trimmed {
             let title = match (out.omitted_frames, out.search_limited) {
+                (0, false) => "Marked range shortened · Coherent pan retained".to_string(),
                 (0, true) => "Search limit reached · Pan may continue".to_string(),
                 (n, true) => format!(
                     "{n} {} omitted · Pan may continue",

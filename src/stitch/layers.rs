@@ -225,6 +225,8 @@ pub(super) fn recipe(
                 position: solved[0],
                 secondary: Some(solved[1]),
                 scale: 1.0,
+                pose: None,
+                layer_mask: None,
             });
             if anchors.len() == 3 {
                 anchors.pop_front();

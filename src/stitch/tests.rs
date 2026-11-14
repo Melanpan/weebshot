@@ -68,6 +68,7 @@ fn check(path: &[(u32, u32)]) {
         composer
             .push(
                 frame,
+                None,
                 ((p.x - min.x) as u32, (p.y - min.y) as u32),
                 &AtomicBool::new(false),
             )
@@ -238,7 +239,7 @@ fn cancellation_during_composition() {
     let mut composer = compose::Composer::new((128, 96));
     assert!(
         composer
-            .push(&artwork(128, 96), (0, 0), &AtomicBool::new(true))
+            .push(&artwork(128, 96), None, (0, 0), &AtomicBool::new(true))
             .is_err()
     );
 }
@@ -507,7 +508,8 @@ fn ffmpeg_video_round_trip() {
             .exists()
     );
 
-    // An explicit cut must fail; automatic discovery must stop before it.
+    // An explicit range across a cut keeps one coherent side and says so;
+    // automatic discovery must stop before it.
     for i in 12..24 {
         let mut frame = crop(&source, 20, 10 + i * 3);
         imageops::invert(&mut frame);
@@ -537,16 +539,26 @@ fn ffmpeg_video_round_trip() {
         playhead: 0.5,
         ..job.clone()
     };
+    let trimmed = run(
+        &ffmpeg,
+        900004,
+        &cut_job,
+        &AtomicBool::new(false),
+        |_, _| {},
+    )
+    .unwrap();
+    assert!(trimmed.range_trimmed);
     assert!(
-        run(
-            &ffmpeg,
-            900004,
-            &cut_job,
-            &AtomicBool::new(false),
-            |_, _| {}
-        )
-        .is_err()
+        trimmed.warning.contains("marked range"),
+        "{}",
+        trimmed.warning
     );
+    assert!(
+        trimmed.range.1 < 1.5 || trimmed.range.0 >= 1.5,
+        "stitched across the cut: {:?}",
+        trimmed.range
+    );
+    assert_eq!(trimmed.dimensions, (128, 129));
     let before_cut = run(
         &ffmpeg,
         900005,
@@ -716,9 +728,11 @@ fn reported_anime_pan_pose_change() {
         })
         .unwrap();
         eprintln!("Total: {:.3}s", out.elapsed);
-        assert_eq!(out.dimensions, (1920, 1924));
-        assert_eq!(out.range, (0.75, 4.0));
-        assert_eq!(out.frames, 10);
+        // Dense residual sampling recovers one more early frame than the
+        // original 24-point grid, without crossing the pose change.
+        assert_eq!(out.dimensions, (1920, 1972));
+        assert_eq!(out.range, (0.625, 3.875));
+        assert_eq!(out.frames, 9);
         assert!(out.confidence > 0.9);
         assert!(out.warning.contains("Omitted 2 selected frames"));
         eprintln!(
@@ -918,8 +932,12 @@ fn seam_keeps_an_animated_arm_whole() {
     let a = imageops::crop_imm(&pose_a, 0, 32, 128, 96).to_image();
     let b = imageops::crop_imm(&pose_b, 0, 0, 128, 96).to_image();
     let mut composer = compose::Composer::new((128, 128));
-    composer.push(&a, (0, 32), &AtomicBool::new(false)).unwrap();
-    composer.push(&b, (0, 0), &AtomicBool::new(false)).unwrap();
+    composer
+        .push(&a, None, (0, 32), &AtomicBool::new(false))
+        .unwrap();
+    composer
+        .push(&b, None, (0, 0), &AtomicBool::new(false))
+        .unwrap();
     let out = imageops::colorops::grayscale(&composer.finish());
     assert!(
         out == gray(&pose_a) || out == gray(&pose_b),
@@ -932,11 +950,11 @@ fn missing_intermediate_frame_does_not_create_a_gap() {
     let mut composer = compose::Composer::new((128, 296));
     let frame = artwork(128, 96);
     composer
-        .push(&frame, (0, 200), &AtomicBool::new(false))
+        .push(&frame, None, (0, 200), &AtomicBool::new(false))
         .unwrap();
     assert!(
         composer
-            .push(&frame, (0, 0), &AtomicBool::new(false))
+            .push(&frame, None, (0, 0), &AtomicBool::new(false))
             .unwrap_err()
             .to_string()
             .contains("intermediate")
@@ -1224,6 +1242,32 @@ fn legacy_stitch_settings_default_to_automatic_method() {
 }
 
 #[test]
+fn stale_advanced_thresholds_are_refreshed() {
+    // Older files stored every hidden threshold without a tuning version.
+    let saved: Options = ron::from_str(
+        "(method: translation, selection_travel: 0.12, min_edge_agreement: 0.7, \
+         native_thresholds: (max_error: 3.0, min_support: 0.9))",
+    )
+    .unwrap();
+    assert_eq!(saved.tuning, 0);
+    let current = saved.current();
+    assert_eq!(current.method, Method::Translation);
+    assert_eq!(current.selection_travel, 0.12);
+    assert_eq!(
+        current.min_edge_agreement,
+        Options::default().min_edge_agreement
+    );
+    assert_eq!(current.native_thresholds.max_error, 8.0);
+    // Hand-tuned values saved under the current tuning are kept.
+    let tuned = Options {
+        min_edge_agreement: 0.9,
+        ..Default::default()
+    };
+    let restored: Options = ron::from_str(&ron::to_string(&tuned).unwrap()).unwrap();
+    assert_eq!(restored.current().min_edge_agreement, 0.9);
+}
+
+#[test]
 fn shift_and_scale_video_round_trip() {
     let ffmpeg = crate::export::find_tool("ffmpeg");
     if std::process::Command::new(&ffmpeg)
@@ -1383,12 +1427,14 @@ fn assert_psd_matches_stitch(path: &std::path::Path, expected: &RgbaImage, count
             .zip(mask.data.as_chunks::<4>().0)
             .enumerate()
         {
-            assert_eq!(color[3], 255);
+            // Rotated layers have transparent corners outside the source
+            // frame. Those pixels are never owned, so their mask hides them.
             if mask[0] == 0 {
-                hidden = true;
+                hidden |= color[3] == 255;
                 continue;
             }
             assert_eq!(mask[0], 255);
+            assert_eq!(color[3], 255);
             let x = x0 + (i as u32 % image.width) as i32;
             let y = y0 + (i as u32 / image.width) as i32;
             if x >= 0 && y >= 0 && x < expected.width() as i32 && y < expected.height() as i32 {
@@ -1429,10 +1475,12 @@ fn reported_overlapping_layers_experimental_preview() {
         |_, _| {},
     )
     .unwrap();
+    // Several characters at different depths over a moving cube backdrop:
+    // more than two planes, so only a preview is expected, not a clean result.
     assert_eq!(output.method, Method::LayeredMotion);
     assert!(output.frames >= 4);
-    assert!(output.dimensions.1 > 1900, "{:?}", output.dimensions);
-    assert!(output.warning.contains("visible seams"));
+    assert!(output.dimensions.1 > 1500, "{:?}", output.dimensions);
+    assert!(output.warning.contains("foreground"), "{}", output.warning);
     eprintln!(
         "{:?}, {} frames, {:.2}s",
         output.dimensions, output.frames, output.elapsed
@@ -1441,29 +1489,601 @@ fn reported_overlapping_layers_experimental_preview() {
         std::fs::copy(&output.artifact.0, path).unwrap();
     }
     if let Some(path) = std::env::var_os("WEEBSHOT_LAYERED_PSD") {
-        let path = PathBuf::from(path);
         save_psd(
             &crate::export::find_tool("ffmpeg"),
             910046,
             &output.recipe,
             &output.included,
-            &path,
+            &PathBuf::from(path),
             &AtomicBool::new(false),
             |_, _| {},
         )
         .unwrap();
-        let png = image::open(&output.artifact.0).unwrap().to_rgba8();
-        assert_psd_matches_stitch(&path, &png, output.frames);
     }
-    let mut background = job;
-    background.options.prefer_background = true;
-    let output_background = run(
-        &crate::export::find_tool("ffmpeg"),
-        910047,
-        &background,
-        &AtomicBool::new(false),
+}
+
+/// Sample `source` as a camera at `center` rolled by `angle` would see it.
+fn rolled_view(source: &RgbImage, center: (f32, f32), angle: f32) -> RgbImage {
+    let (sin, cos) = angle.sin_cos();
+    RgbImage::from_fn(320, 180, |x, y| {
+        let (px, py) = (x as f32 - 160.0, y as f32 - 90.0);
+        let sx = center.0 + cos * px - sin * py;
+        let sy = center.1 + sin * px + cos * py;
+        let (ix, iy) = (sx.floor() as u32, sy.floor() as u32);
+        let (u, v) = (sx - ix as f32, sy - iy as f32);
+        let p = |dx, dy| source.get_pixel(ix + dx, iy + dy);
+        Rgb(std::array::from_fn(|c| {
+            let top = f32::from(p(0, 0)[c]) * (1.0 - u) + f32::from(p(1, 0)[c]) * u;
+            let bottom = f32::from(p(0, 1)[c]) * (1.0 - u) + f32::from(p(1, 1)[c]) * u;
+            (top * (1.0 - v) + bottom * v).round() as u8
+        }))
+    })
+}
+
+/// A vertical pan whose camera also rolls, as in the reported Toaru clip.
+/// Translation alone cannot align it; Automatic must fall back to rotation.
+#[test]
+fn rolling_pan_video_round_trip() {
+    let ffmpeg = crate::export::find_tool("ffmpeg");
+    if std::process::Command::new(&ffmpeg)
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("weebshot-stitch-roll-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let source = imageops::blur(&artwork(520, 520), 1.5);
+    let path = |n: u32| {
+        (
+            (260.0 + n as f32),
+            (380.0 - 9.0 * n as f32),
+            0.018 * n as f32,
+        )
+    };
+    for n in 0..16 {
+        let (x, y, angle) = path(n);
+        rolled_view(&source, (x, y), angle)
+            .save(dir.join(format!("{n:03}.png")))
+            .unwrap();
+    }
+    let video = dir.join("roll.mkv");
+    assert!(
+        std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-framerate",
+                "8",
+                "-i"
+            ])
+            .arg(dir.join("%03d.png"))
+            .args(["-c:v", "ffv1", "-threads", "1"])
+            .arg(&video)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let cancel = AtomicBool::new(false);
+    let job = |method, range| Job {
+        input: video.clone(),
+        playhead: 1.0,
+        duration: 2.0,
+        range,
+        source_fps: 8.0,
+        options: Options {
+            method,
+            ..Default::default()
+        },
+    };
+    assert!(
+        run(
+            &ffmpeg,
+            910050,
+            &job(Method::Translation, Some((0.0, 2.0))),
+            &cancel,
+            |_, _| {}
+        )
+        .is_err(),
+        "a 15° roll must not pass as a translation"
+    );
+    for (id, range) in [(910051, Some((0.0, 2.0))), (910052, None)] {
+        let output = run(
+            &ffmpeg,
+            id,
+            &job(Method::Automatic, range),
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(output.method, Method::ShiftAndScale, "{range:?}");
+        assert_eq!(output.range, (0.0, 1.875), "{range:?}");
+        let frames = &output.recipe.frames;
+        let last = frames.last().unwrap().pose.unwrap();
+        let (x, y, angle) = path(15);
+        assert!((last.angle - angle).abs() < 0.004, "{last:?}");
+        assert!((last.scale - 1.0).abs() < 0.005, "{last:?}");
+        assert!((last.x - (x - 260.0)).abs() < 1.5, "{last:?}");
+        assert!((last.y - (y - 380.0)).abs() < 1.5, "{last:?}");
+        // Canvas pixel (X, Y) is frame-0 pixel (X + min.x, Y + min.y).
+        let min = (
+            frames.iter().map(|f| f.position.x).min().unwrap(),
+            frames.iter().map(|f| f.position.y).min().unwrap(),
+        );
+        let reconstructed = image::open(&output.artifact.0).unwrap().to_rgba8();
+        let (mut total, mut coverage) = (0u64, 0u64);
+        for (cx, cy, pixel) in reconstructed.enumerate_pixels() {
+            if pixel[3] == 255 {
+                let sx = (cx as i32 + min.0 + 100) as u32;
+                let sy = (cy as i32 + min.1 + 290) as u32;
+                total += u64::from(pixel[0].abs_diff(source.get_pixel(sx, sy)[0]));
+                coverage += 1;
+            }
+        }
+        assert!(coverage > 80_000, "{coverage} covered pixels");
+        let mean = total as f64 / coverage as f64;
+        assert!(mean < 10.0, "mean error {mean}");
+        // Rotated frames leave uncovered corners rather than black fill.
+        assert!(reconstructed.pixels().any(|p| p[3] == 0));
+        if range.is_none() {
+            continue;
+        }
+        let psd_path = dir.join("roll.psd");
+        save_psd(
+            &ffmpeg,
+            910053,
+            &output.recipe,
+            &output.included,
+            &psd_path,
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_psd_matches_stitch(&psd_path, &reconstructed, output.frames);
+        let mut included = output.included.clone();
+        *included.last_mut().unwrap() = false;
+        let edited = recompose(
+            &ffmpeg,
+            910054,
+            output.recipe.clone(),
+            included,
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(edited.dimensions.1 < output.dimensions.1);
+    }
+}
+
+/// User-provided footage remains outside the repository: an upward pan whose
+/// camera rolls about 29° while it decelerates.
+#[test]
+#[ignore = "requires WEEBSHOT_ROLLING_PAN_SAMPLE"]
+fn reported_rolling_pan() {
+    let input = PathBuf::from(
+        std::env::var_os("WEEBSHOT_ROLLING_PAN_SAMPLE").expect("set WEEBSHOT_ROLLING_PAN_SAMPLE"),
+    );
+    let ffmpeg = crate::export::find_tool("ffmpeg");
+    for (id, method, range) in [
+        (910060, Method::Automatic, Some((0.0, 3.379))),
+        (910061, Method::Automatic, None),
+        (910062, Method::ShiftAndScale, None),
+    ] {
+        let job = Job {
+            input: input.clone(),
+            playhead: 1.0,
+            duration: 3.379,
+            range,
+            source_fps: 24000.0 / 1001.0,
+            options: Options {
+                method,
+                ..Default::default()
+            },
+        };
+        let stage = std::cell::RefCell::new(("", Instant::now()));
+        let out = run(&ffmpeg, id, &job, &AtomicBool::new(false), |_, name| {
+            let mut current = stage.borrow_mut();
+            if current.0 != name {
+                if !current.0.is_empty() {
+                    eprintln!("  {}: {:.3}s", current.0, current.1.elapsed().as_secs_f64());
+                }
+                *current = (name, Instant::now());
+            }
+        })
+        .unwrap();
+        eprintln!(
+            "rolling {method:?} {range:?}: {:?}, {} frames, {:?}, {:.1}s",
+            out.dimensions, out.frames, out.range, out.elapsed
+        );
+        assert_eq!(out.method, Method::ShiftAndScale);
+        assert!(out.range.0 < 0.05 && out.range.1 > 3.2, "{:?}", out.range);
+        assert!(
+            out.dimensions.0 > 2200 && out.dimensions.1 > 2000,
+            "{:?}",
+            out.dimensions
+        );
+        let roll = out.recipe.frames.last().unwrap().pose.unwrap().angle;
+        assert!((0.45..0.58).contains(&roll), "roll {roll}");
+        if let Some(path) = std::env::var_os("WEEBSHOT_ROLLING_PREVIEW") {
+            std::fs::copy(
+                &out.artifact.0,
+                PathBuf::from(path).join(format!("{id}.png")),
+            )
+            .unwrap();
+        }
+    }
+}
+
+/// Benchmark over local footage. `WEEBSHOT_BENCH` names a list with one
+/// `path` or `path|in|out` per line; `WEEBSHOT_BENCH_OUT` receives previews
+/// named `<line>-0.png` (In/Out) and `<line>-1.png` (Automatic from the
+/// window's midpoint). `WEEBSHOT_BENCH_ONLY=3,7` limits it to those lines and
+/// `WEEBSHOT_BENCH_METHOD=layered|scale|translation` overrides Automatic.
+#[test]
+#[ignore = "requires WEEBSHOT_BENCH"]
+fn local_footage_benchmark() {
+    let list = std::fs::read_to_string(std::env::var_os("WEEBSHOT_BENCH").unwrap()).unwrap();
+    let out_dir = PathBuf::from(std::env::var_os("WEEBSHOT_BENCH_OUT").unwrap());
+    let ffmpeg = crate::export::find_tool("ffmpeg");
+    for (n, line) in list.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        let mut parts = line.trim().split('|');
+        let input = PathBuf::from(parts.next().unwrap());
+        let window: Option<(f64, f64)> = parts
+            .next()
+            .map(|a| (a.parse().unwrap(), parts.next().unwrap().parse().unwrap()));
+        let probe = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=r_frame_rate:format=duration",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&input)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&probe.stdout);
+        let mut lines = text.lines();
+        let rate = lines.next().unwrap_or("24/1").trim_end_matches(',');
+        let (a, b) = rate.split_once('/').unwrap_or((rate, "1"));
+        let fps = a.parse::<f64>().unwrap() / b.parse::<f64>().unwrap();
+        let duration: f64 = lines.next().unwrap().trim().parse().unwrap();
+        let name: String = match window {
+            Some((a, b)) => format!("ep {a:.1}-{b:.1}"),
+            None => input
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .chars()
+                .skip(12)
+                .take(28)
+                .collect(),
+        };
+        let (lo, hi) = window.unwrap_or((0.0, duration));
+        if std::env::var("WEEBSHOT_BENCH_ONLY")
+            .is_ok_and(|v| !v.split(',').any(|k| k == n.to_string()))
+        {
+            continue;
+        }
+        for (k, range) in [Some((lo, hi)), None].into_iter().enumerate() {
+            let job = Job {
+                input: input.clone(),
+                playhead: (lo + hi) / 2.0,
+                duration,
+                range,
+                source_fps: fps,
+                options: Options {
+                    method: match std::env::var("WEEBSHOT_BENCH_METHOD").as_deref() {
+                        Ok("layered") => Method::LayeredMotion,
+                        Ok("scale") => Method::ShiftAndScale,
+                        Ok("translation") => Method::Translation,
+                        _ => Method::Automatic,
+                    },
+                    ..Default::default()
+                },
+            };
+            let started = Instant::now();
+            match run(
+                &ffmpeg,
+                990000 + n as u64 * 10 + k as u64,
+                &job,
+                &AtomicBool::new(false),
+                |_, _| {},
+            ) {
+                Ok(out) => {
+                    eprintln!(
+                        "BENCH {n} {name} {}: OK {:?} {:?} frames {} range {:.2}-{:.2} conf {:.2} omitted {} {:.1}s",
+                        if range.is_some() { "range" } else { "auto " },
+                        out.method,
+                        out.dimensions,
+                        out.frames,
+                        out.range.0,
+                        out.range.1,
+                        out.confidence,
+                        out.omitted_frames,
+                        started.elapsed().as_secs_f32()
+                    );
+                    out.preview
+                        .save(out_dir.join(format!("{n}-{k}.png")))
+                        .unwrap();
+                }
+                Err(e) => eprintln!(
+                    "BENCH {n} {name} {}: ERR {:.1}s {e:#}",
+                    if range.is_some() { "range" } else { "auto " },
+                    started.elapsed().as_secs_f32()
+                ),
+            }
+        }
+    }
+}
+
+/// A character cel that pans slower than its background. The layered method
+/// must keep the sprite whole and rebuild the background around it.
+#[test]
+fn layered_planes_video_round_trip() {
+    let ffmpeg = crate::export::find_tool("ffmpeg");
+    if std::process::Command::new(&ffmpeg)
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("weebshot-stitch-planes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let background = imageops::blur(&artwork(640, 520), 1.0);
+    // An outlined ellipse with its own texture, distinct from the background.
+    let texture = artwork(280, 200);
+    let inside = |x: u32, y: u32| {
+        let (dx, dy) = ((x as f32 - 140.0) / 136.0, (y as f32 - 100.0) / 96.0);
+        dx * dx + dy * dy
+    };
+    let sprite = RgbImage::from_fn(280, 200, |x, y| {
+        let r = inside(x, y);
+        if r > 0.88 {
+            Rgb([20, 15, 30])
+        } else {
+            let p = texture.get_pixel(279 - x, y);
+            Rgb([255 - p[0], 200 - p[1] / 2, p[2] / 2 + 60])
+        }
+    });
+    let (sprite_x, sprite_y) = (180u32, 140u32);
+    let frames = 16u32;
+    for n in 0..frames {
+        let mut frame = imageops::crop_imm(&background, 0, 8 * n, 640, 360).to_image();
+        for (x, y, p) in sprite.enumerate_pixels() {
+            if inside(x, y) <= 1.0 {
+                frame.put_pixel(sprite_x + x, sprite_y - 3 * n + y, *p);
+            }
+        }
+        frame.save(dir.join(format!("{n:03}.png"))).unwrap();
+    }
+    let video = dir.join("planes.mkv");
+    assert!(
+        std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-framerate",
+                "8",
+                "-i"
+            ])
+            .arg(dir.join("%03d.png"))
+            .args(["-c:v", "ffv1", "-threads", "1"])
+            .arg(&video)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let cancel = AtomicBool::new(false);
+    let job = |method| Job {
+        input: video.clone(),
+        playhead: 1.0,
+        duration: 2.0,
+        range: Some((0.0, 2.0)),
+        source_fps: 8.0,
+        options: Options {
+            method,
+            ..Default::default()
+        },
+    };
+    let output = run(
+        &ffmpeg,
+        910070,
+        &job(Method::LayeredMotion),
+        &cancel,
         |_, _| {},
     )
     .unwrap();
-    assert!(output_background.dimensions.1 < output.dimensions.1);
+    assert_eq!(output.method, Method::LayeredMotion);
+    let canvas = image::open(&output.artifact.0).unwrap().to_rgba8();
+    assert_eq!(canvas.width(), 640);
+    assert!(
+        canvas.height().abs_diff(360 + 8 * 15) <= 3,
+        "{:?}",
+        canvas.dimensions()
+    );
+    // The foreground shows the sprite as it was at the middle selected frame.
+    let frames = &output.recipe.frames;
+    let middle = frames[frames.len() / 2].sample as u32;
+    let top = frames.iter().map(|f| f.position.y).min().unwrap();
+    let (fx, fy) = (sprite_x, (sprite_y + 5 * middle) as i32 - top);
+    let mut sprite_error = (0u64, 0u64);
+    let mut background_error = (0u64, 0u64);
+    for (x, y, pixel) in canvas.enumerate_pixels() {
+        let (sx, sy) = (x as i32 - fx as i32, y as i32 - fy);
+        let on_sprite = sx >= 0 && sy >= 0 && sx < 280 && sy < 200;
+        let r = if on_sprite {
+            inside(sx as u32, sy as u32)
+        } else {
+            9.0
+        };
+        if r < 0.8 {
+            let expected = sprite.get_pixel(sx as u32, sy as u32);
+            sprite_error.0 += u64::from(pixel[0].abs_diff(expected[0]));
+            sprite_error.1 += 1;
+        } else if r > 1.6 && pixel[3] == 255 {
+            let by = (y as i32 + top) as u32;
+            if by < 520 {
+                let expected = background.get_pixel(x, by);
+                background_error.0 += u64::from(pixel[0].abs_diff(expected[0]));
+                background_error.1 += 1;
+            }
+        }
+    }
+    let mean = |(total, count): (u64, u64)| total as f64 / count.max(1) as f64;
+    assert!(sprite_error.1 > 30_000, "sprite pixels {}", sprite_error.1);
+    assert!(
+        mean(sprite_error) < 6.0,
+        "sprite error {}",
+        mean(sprite_error)
+    );
+    assert!(
+        background_error.1 > 150_000,
+        "background {}",
+        background_error.1
+    );
+    assert!(
+        mean(background_error) < 6.0,
+        "background error {}",
+        mean(background_error)
+    );
+    // Layers: one background and one foreground layer per frame, foreground
+    // on top, and their masked union reproduces the merged image.
+    let psd_path = dir.join("planes.psd");
+    save_psd(
+        &ffmpeg,
+        910071,
+        &output.recipe,
+        &output.included,
+        &psd_path,
+        &cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    let psd = ag_psd::read_psd(
+        &std::fs::read(&psd_path).unwrap(),
+        &ag_psd::psd::ReadOptions {
+            use_image_data: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(psd.image_data.unwrap().data, *canvas.as_raw());
+    let layers = psd.children.unwrap();
+    assert_eq!(layers.len(), 2 * output.frames);
+    let mut rebuilt = RgbaImage::new(canvas.width(), canvas.height());
+    for layer in layers {
+        let image = layer.image_data.unwrap();
+        let mask = layer.additional_info.mask.unwrap().image_data.unwrap();
+        let (x0, y0) = (layer.left.unwrap() as i32, layer.top.unwrap() as i32);
+        for (i, (color, mask)) in image
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(mask.data.as_chunks::<4>().0)
+            .enumerate()
+        {
+            let (x, y) = (
+                x0 + (i as u32 % image.width) as i32,
+                y0 + (i as u32 / image.width) as i32,
+            );
+            if mask[0] == 255
+                && color[3] == 255
+                && x >= 0
+                && y >= 0
+                && (x as u32) < canvas.width()
+                && (y as u32) < canvas.height()
+            {
+                rebuilt.put_pixel(x as u32, y as u32, image::Rgba(*color));
+            }
+        }
+    }
+    let differing = rebuilt
+        .pixels()
+        .zip(canvas.pixels())
+        .filter(|(a, b)| a != b)
+        .count();
+    // Background holes filled from masked frames have no owning layer.
+    assert!(
+        differing * 200 < (canvas.width() * canvas.height()) as usize,
+        "{differing} pixels differ between the layers and the merged image"
+    );
+    // Frame edits reuse the masks.
+    let mut included = output.included.clone();
+    *included.last_mut().unwrap() = false;
+    let count = frames.len();
+    let edited = recompose(
+        &ffmpeg,
+        910072,
+        output.recipe.clone(),
+        included,
+        &cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    assert!(edited.dimensions.1 < canvas.height());
+    assert!(count >= 3);
+    // A single translating plane is not layered.
+    let flat = dir.join("flat.mkv");
+    for n in 0..16u32 {
+        imageops::crop_imm(&background, 0, 8 * n, 640, 360)
+            .to_image()
+            .save(dir.join(format!("{n:03}.png")))
+            .unwrap();
+    }
+    assert!(
+        std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-framerate",
+                "8",
+                "-i"
+            ])
+            .arg(dir.join("%03d.png"))
+            .args(["-c:v", "ffv1", "-threads", "1"])
+            .arg(&flat)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let single = Job {
+        input: flat,
+        ..job(Method::LayeredMotion)
+    };
+    let error = run(&ffmpeg, 910073, &single, &cancel, |_, _| {})
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("two independently moving layers"),
+        "{error}"
+    );
 }

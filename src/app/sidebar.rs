@@ -232,15 +232,9 @@ impl App {
                     ui.selectable_value(&mut stitch.method, method, method.label());
                 }
             });
-        let adaptive = matches!(stitch.method, Method::Automatic | Method::Translation);
-        let layered_motion = stitch.method == Method::LayeredMotion;
-        if layered_motion {
-            ui.weak("Mark In/Out around one vertical pan.");
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Prioritize");
-                ui.selectable_value(&mut stitch.prefer_background, false, "Foreground");
-                ui.selectable_value(&mut stitch.prefer_background, true, "Background");
-            });
+        let adaptive = stitch.method != Method::TwoVerticalLayers;
+        if stitch.method == Method::LayeredMotion {
+            ui.weak("For a character that pans at a different speed from the scenery behind it. Stitches both layers separately.");
         } else if !adaptive && discovery {
             ui.weak("Mark In/Out if the search window includes other shots.");
         }
@@ -271,22 +265,18 @@ impl App {
                             .map(|n| n / 100.0)
                     }),
             )
-            .on_hover_text(if layered_motion {
-                "Time between selected frames. Smaller values use more frames."
+            .on_hover_text(
+                "Minimum camera travel between selected frames as a percentage of the frame.",
+            );
+            ui.weak(if adaptive {
+                "Analysis frames/second (adaptive)"
             } else {
-                "Minimum camera travel between selected frames as a percentage of the frame."
+                "Analysis frames/second"
             });
-            if !layered_motion {
-                ui.weak(if adaptive {
-                    "Analysis frames/second (adaptive)"
-                } else {
-                    "Analysis frames/second"
-                });
-                ui.add(egui::Slider::new(&mut stitch.sampling_fps, 2.0..=16.0));
-                if discovery {
-                    ui.weak("Search seconds in each direction");
-                    ui.add(egui::Slider::new(&mut stitch.search_seconds, 1.0..=30.0));
-                }
+            ui.add(egui::Slider::new(&mut stitch.sampling_fps, 2.0..=16.0));
+            if discovery {
+                ui.weak("Search seconds in each direction");
+                ui.add(egui::Slider::new(&mut stitch.search_seconds, 1.0..=30.0));
             }
             if adaptive {
                 ui.checkbox(&mut stitch.allow_pauses, "Allow short pan pauses");
