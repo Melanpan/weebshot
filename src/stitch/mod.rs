@@ -944,6 +944,9 @@ fn solve(
     let mut group = 0usize;
     let mut qualities = Vec::new();
     let mut thumbnails = Vec::new();
+    // Why unmatched frames failed, for the error message: no reference
+    // matched at all, or one matched in position but its outlines differ.
+    let (mut unmatched, mut outlines_differ) = (0usize, 0usize);
     let indices: Vec<_> = selected.iter().map(|i| lo + i).collect();
     report(0.4, "Aligning selected frames at source resolution");
     decode::selected_frames(
@@ -976,6 +979,7 @@ fn solve(
             // at once. Otherwise keep the best-agreeing acceptable reference:
             // an old one is more likely to differ by animation.
             let mut weaker: Option<(Position, f32, f32)> = None;
+            let mut positioned = false;
             for (anchor, a) in &anchors {
                 check_cancel(cancel)?;
                 // Compare analysis positions in the same coordinate system. A
@@ -999,6 +1003,7 @@ fn solve(
                     &options.native_thresholds,
                 );
                 let reliable = m.reliable(&options.native_thresholds);
+                positioned |= reliable;
                 let edge_agreement = if reliable {
                     a.edge_agreement(&prepared, m)
                 } else {
@@ -1037,6 +1042,11 @@ fn solve(
                 // than anchoring every subsequent match to that first pose.
                 group += 1;
                 anchors.clear();
+                if positioned {
+                    outlines_differ += 1;
+                } else {
+                    unmatched += 1;
+                }
             }
             groups.push(group);
             qualities.push(quality);
@@ -1057,7 +1067,19 @@ fn solve(
         } else {
             layers::ALIGNMENT_ERROR
         };
-        return fallback()?.context(error);
+        let total = original_count - 1;
+        let cause = if outlines_differ > 0 && outlines_differ >= unmatched {
+            format!(
+                "{outlines_differ} of {total} frames line up by position but their outlines differ, which usually means a character moving or layers sliding over each other. A shorter range or Force a result may help."
+            )
+        } else if unmatched > 0 {
+            format!(
+                "{unmatched} of {total} frames found no match at full resolution, which usually means zoom, rotation or heavy animation. Force a result may help."
+            )
+        } else {
+            "The frames that match reveal too little new area.".to_string()
+        };
+        return fallback()?.with_context(|| format!("{error} What failed: {cause}"));
     };
     let keep: Vec<_> = (0..selected.len()).filter(|&n| groups[n] == best).collect();
     drop(frames);

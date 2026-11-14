@@ -1738,18 +1738,98 @@ fn reported_rolling_pan() {
     }
 }
 
+/// How well consecutive frames of a translation stitch agree where they
+/// overlap: the share of overlapping pixels (every other pixel) whose
+/// grayscale values differ by more than 24. Animation inside the overlap
+/// counts too, so this ranks results rather than proving an error. `None`
+/// for methods that warp or split frames.
+fn seam_mismatch(ffmpeg: &std::path::Path, out: &Output) -> Option<f32> {
+    let recipe = &out.recipe;
+    if recipe.method != Method::Translation || recipe.split.is_some() {
+        return None;
+    }
+    let frames: Vec<_> = recipe
+        .frames
+        .iter()
+        .zip(&out.included)
+        .filter(|(_, included)| **included)
+        .map(|(frame, _)| frame)
+        .collect();
+    let indices: Vec<_> = frames.iter().map(|f| f.sample).collect();
+    let mut previous: Option<GrayImage> = None;
+    let mut shares = Vec::new();
+    decode::selected_frames(
+        ffmpeg,
+        &recipe.input,
+        recipe.start,
+        recipe.end,
+        recipe.fps,
+        &indices,
+        recipe.native,
+        &AtomicBool::new(false),
+        |n, rgb| {
+            let gray = motion::grayscale(&rgb);
+            if let Some(older) = &previous {
+                let (dx, dy) = frames[n].position.delta(frames[n - 1].position);
+                let (w, h) = (gray.width() as i32, gray.height() as i32);
+                let (mut total, mut bad) = (0u32, 0u32);
+                for y in (0.max(-dy)..h.min(h - dy)).step_by(2) {
+                    for x in (0.max(-dx)..w.min(w - dx)).step_by(2) {
+                        total += 1;
+                        let a = older.get_pixel((x + dx) as u32, (y + dy) as u32)[0];
+                        bad += u32::from(a.abs_diff(gray.get_pixel(x as u32, y as u32)[0]) > 24);
+                    }
+                }
+                if total > 0 {
+                    shares.push(bad as f32 / total as f32);
+                }
+            }
+            previous = Some(gray);
+            Ok(())
+        },
+    )
+    .ok()?;
+    (!shares.is_empty()).then(|| shares.iter().sum::<f32>() / shares.len() as f32)
+}
+
 /// Benchmark over local footage. `WEEBSHOT_BENCH` names a list with one
-/// `path` or `path|in|out` per line; `WEEBSHOT_BENCH_OUT` receives previews
-/// named `<line>-0.png` (In/Out) and `<line>-1.png` (Automatic from the
-/// window's midpoint). `WEEBSHOT_BENCH_ONLY=3,7` limits it to those lines and
-/// `WEEBSHOT_BENCH_METHOD=layered|scale|translation` overrides Automatic.
+/// `path` or `path|in|out` per line. Every clip runs three ways: `range`
+/// (the whole window marked In/Out), `start` (Automatic with the playhead
+/// where it rests after opening the clip) and `mid` (Automatic from the
+/// window's midpoint). `WEEBSHOT_BENCH_OUT` receives `<line>-<mode>.png`
+/// previews and `results.tsv`.
+///
+/// `WEEBSHOT_BENCH_BASELINE` names an earlier `results.tsv`; differences are
+/// printed as `DIFF` lines and, with `WEEBSHOT_BENCH_STRICT`, a result that
+/// was lost or whose seams got worse fails the test. Other switches:
+/// `WEEBSHOT_BENCH_ONLY=3,7` (line numbers), `WEEBSHOT_BENCH_MODES=start,mid`,
+/// `WEEBSHOT_BENCH_METHOD=layered|scale|translation`, `WEEBSHOT_BENCH_FORCE`,
+/// `WEEBSHOT_BENCH_JOBS` (parallel stitches, default half the cores).
 #[test]
 #[ignore = "requires WEEBSHOT_BENCH"]
 fn local_footage_benchmark() {
+    use std::collections::{BTreeMap, VecDeque};
+    use std::sync::Mutex;
     let list = std::fs::read_to_string(std::env::var_os("WEEBSHOT_BENCH").unwrap()).unwrap();
     let out_dir = PathBuf::from(std::env::var_os("WEEBSHOT_BENCH_OUT").unwrap());
+    std::fs::create_dir_all(&out_dir).unwrap();
     let ffmpeg = crate::export::find_tool("ffmpeg");
+    let listed = |name: &str, value: &str| {
+        std::env::var(name).map_or(true, |v| v.split(',').any(|k| k == value))
+    };
+    struct Clip {
+        n: usize,
+        key: String,
+        input: PathBuf,
+        window: (f64, f64),
+        fps: f64,
+        duration: f64,
+    }
+    let mut clips = Vec::new();
     for (n, line) in list.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        if !listed("WEEBSHOT_BENCH_ONLY", &n.to_string()) {
+            continue;
+        }
         let mut parts = line.trim().split('|');
         let input = PathBuf::from(parts.next().unwrap());
         let window: Option<(f64, f64)> = parts
@@ -1775,84 +1855,255 @@ fn local_footage_benchmark() {
         let (a, b) = rate.split_once('/').unwrap_or((rate, "1"));
         let fps = a.parse::<f64>().unwrap() / b.parse::<f64>().unwrap();
         let duration: f64 = lines.next().unwrap().trim().parse().unwrap();
-        let name: String = match window {
-            Some((a, b)) => format!("ep {a:.1}-{b:.1}"),
-            None => input
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .chars()
-                .skip(12)
-                .take(28)
-                .collect(),
-        };
-        let (lo, hi) = window.unwrap_or((0.0, duration));
-        if std::env::var("WEEBSHOT_BENCH_ONLY")
-            .is_ok_and(|v| !v.split(',').any(|k| k == n.to_string()))
-        {
+        let file = input.file_name().unwrap().to_string_lossy().into_owned();
+        clips.push(Clip {
+            n,
+            key: match window {
+                Some((a, b)) => format!("{file}@{a:.1}-{b:.1}"),
+                None => file,
+            },
+            input,
+            window: window.unwrap_or((0.0, duration)),
+            fps,
+            duration,
+        });
+    }
+    const MODES: [&str; 3] = ["range", "start", "mid"];
+    let queue: Mutex<VecDeque<(usize, &str)>> = Mutex::new(
+        (0..clips.len())
+            .flat_map(|c| MODES.map(|mode| (c, mode)))
+            .filter(|(_, mode)| listed("WEEBSHOT_BENCH_MODES", mode))
+            .collect(),
+    );
+    // Columns of results.tsv after the clip and mode.
+    struct Row {
+        ok: bool,
+        method: String,
+        size: (u32, u32),
+        frames: usize,
+        range: (f64, f64),
+        omitted: usize,
+        forced: bool,
+        mismatch: Option<f32>,
+        seconds: f32,
+        message: String,
+    }
+    let rows: Mutex<BTreeMap<(usize, usize), Row>> = Mutex::new(BTreeMap::new());
+    let jobs = std::env::var("WEEBSHOT_BENCH_JOBS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get() / 2))
+        .max(1);
+    std::thread::scope(|scope| {
+        for _ in 0..jobs {
+            scope.spawn(|| {
+                loop {
+                    let Some((c, mode)) = queue.lock().unwrap().pop_front() else {
+                        break;
+                    };
+                    let clip = &clips[c];
+                    let (lo, hi) = clip.window;
+                    let m = MODES.iter().position(|k| *k == mode).unwrap();
+                    let job = Job {
+                        input: clip.input.clone(),
+                        playhead: if mode == "start" { lo } else { (lo + hi) / 2.0 },
+                        duration: clip.duration,
+                        range: (mode == "range").then_some((lo, hi)),
+                        source_fps: clip.fps,
+                        options: Options {
+                            method: match std::env::var("WEEBSHOT_BENCH_METHOD").as_deref() {
+                                Ok("layered") => Method::LayeredMotion,
+                                Ok("scale") => Method::ShiftAndScale,
+                                Ok("translation") => Method::Translation,
+                                _ => Method::Automatic,
+                            },
+                            force: std::env::var_os("WEEBSHOT_BENCH_FORCE").is_some(),
+                            ..Default::default()
+                        },
+                    };
+                    let started = Instant::now();
+                    let id = 990000 + clip.n as u64 * 10 + m as u64;
+                    let result = run(&ffmpeg, id, &job, &AtomicBool::new(false), |_, _| {});
+                    let seconds = started.elapsed().as_secs_f32();
+                    let row = match result {
+                        Ok(out) => {
+                            out.preview
+                                .save(out_dir.join(format!("{}-{mode}.png", clip.n)))
+                                .unwrap();
+                            Row {
+                                ok: true,
+                                method: format!("{:?}", out.method),
+                                size: out.dimensions,
+                                frames: out.frames,
+                                range: out.range,
+                                omitted: out.omitted_frames,
+                                forced: out.forced,
+                                mismatch: seam_mismatch(&ffmpeg, &out),
+                                seconds,
+                                message: String::new(),
+                            }
+                        }
+                        Err(error) => Row {
+                            ok: false,
+                            method: String::new(),
+                            size: (0, 0),
+                            frames: 0,
+                            range: (0.0, 0.0),
+                            omitted: 0,
+                            forced: false,
+                            mismatch: None,
+                            seconds,
+                            message: format!("{error:#}").replace(['\t', '\n'], " "),
+                        },
+                    };
+                    rows.lock().unwrap().insert((c, m), row);
+                }
+            });
+        }
+    });
+    let rows = rows.into_inner().unwrap();
+    let mut tsv = String::from(
+        "clip\tmode\tstatus\tmethod\twidth\theight\tframes\tstart\tend\tomitted\tforced\tmismatch\tseconds\tmessage\n",
+    );
+    for (&(c, m), row) in &rows {
+        let mismatch = row.mismatch.map_or(String::new(), |v| format!("{v:.3}"));
+        tsv += &format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{mismatch}\t{:.1}\t{}\n",
+            clips[c].key,
+            MODES[m],
+            if row.ok { "OK" } else { "ERR" },
+            row.method,
+            row.size.0,
+            row.size.1,
+            row.frames,
+            row.range.0,
+            row.range.1,
+            row.omitted,
+            row.forced,
+            row.seconds,
+            row.message
+        );
+        eprintln!(
+            "BENCH {:>3} {:<5} {} {}",
+            clips[c].n,
+            MODES[m],
+            if row.ok {
+                format!(
+                    "OK{} {} {}x{} frames {} range {:.2}-{:.2} omitted {} mismatch {}",
+                    if row.forced { " FORCED" } else { "" },
+                    row.method,
+                    row.size.0,
+                    row.size.1,
+                    row.frames,
+                    row.range.0,
+                    row.range.1,
+                    row.omitted,
+                    if mismatch.is_empty() { "-" } else { &mismatch }
+                )
+            } else {
+                format!("ERR {}", row.message)
+            },
+            clips[c].key
+        );
+    }
+    std::fs::write(out_dir.join("results.tsv"), &tsv).unwrap();
+    // Summary: what a user sees depends on the playhead only where start and
+    // mid disagree; two-frame results are stitches in name only.
+    for (m, mode) in MODES.iter().enumerate() {
+        let of_mode: Vec<_> = rows
+            .iter()
+            .filter(|(k, _)| k.1 == m)
+            .map(|(_, r)| r)
+            .collect();
+        if of_mode.is_empty() {
             continue;
         }
-        // `WEEBSHOT_BENCH_PLAYHEAD=0` puts the playhead at the window start,
-        // where it rests after opening a clip; 0.5 (the default) is the midpoint.
-        let at: f64 = std::env::var("WEEBSHOT_BENCH_PLAYHEAD")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.5);
-        for (k, range) in [Some((lo, hi)), None].into_iter().enumerate() {
-            if range.is_some() && std::env::var_os("WEEBSHOT_BENCH_AUTO_ONLY").is_some() {
-                continue;
+        let ok: Vec<_> = of_mode.iter().filter(|r| r.ok).collect();
+        let mut mismatches: Vec<f32> = ok.iter().filter_map(|r| r.mismatch).collect();
+        mismatches.sort_by(f32::total_cmp);
+        eprintln!(
+            "SUMMARY {mode:<5} {}/{} OK, {} forced, {} two-frame, median seam mismatch {:.3}, worst {:.3}",
+            ok.len(),
+            of_mode.len(),
+            ok.iter().filter(|r| r.forced).count(),
+            ok.iter().filter(|r| r.frames == 2).count(),
+            mismatches.get(mismatches.len() / 2).copied().unwrap_or(0.0),
+            mismatches.last().copied().unwrap_or(0.0)
+        );
+    }
+    let disagree = (0..clips.len())
+        .filter(|&c| {
+            rows.get(&(c, 1))
+                .zip(rows.get(&(c, 2)))
+                .is_some_and(|(a, b)| a.ok != b.ok)
+        })
+        .count();
+    eprintln!("SUMMARY start and mid disagree on {disagree} clips");
+    let Some(baseline) = std::env::var_os("WEEBSHOT_BENCH_BASELINE") else {
+        return;
+    };
+    let baseline = std::fs::read_to_string(baseline).unwrap();
+    let mut failures = 0;
+    let mut differences = 0;
+    for line in baseline.lines().skip(1) {
+        let f: Vec<_> = line.split('\t').collect();
+        let Some(c) = clips.iter().position(|clip| clip.key == f[0]) else {
+            continue;
+        };
+        let Some(row) = MODES
+            .iter()
+            .position(|m| *m == f[1])
+            .and_then(|m| rows.get(&(c, m)))
+        else {
+            continue;
+        };
+        let was_ok = f[2] == "OK";
+        let area = |w: f64, h: f64| w * h;
+        let before = area(f[4].parse().unwrap(), f[5].parse().unwrap());
+        let after = area(row.size.0.into(), row.size.1.into());
+        let seam = f[11].parse::<f32>().ok().zip(row.mismatch);
+        let change = match (was_ok, row.ok) {
+            (true, false) => Some(("LOST", true)),
+            (false, true) => Some(("GAINED", false)),
+            (false, false) => None,
+            (true, true) if seam.is_some_and(|(a, b)| b > a + 0.02) => Some(("SEAMS WORSE", true)),
+            (true, true) if (after - before).abs() > before * 0.05 => Some(("SIZE", false)),
+            (true, true) if seam.is_some_and(|(a, b)| b < a - 0.02) => {
+                Some(("SEAMS BETTER", false))
             }
-            let job = Job {
-                input: input.clone(),
-                playhead: lo + (hi - lo) * at,
-                duration,
-                range,
-                source_fps: fps,
-                options: Options {
-                    method: match std::env::var("WEEBSHOT_BENCH_METHOD").as_deref() {
-                        Ok("layered") => Method::LayeredMotion,
-                        Ok("scale") => Method::ShiftAndScale,
-                        Ok("translation") => Method::Translation,
-                        _ => Method::Automatic,
-                    },
-                    force: std::env::var_os("WEEBSHOT_BENCH_FORCE").is_some(),
-                    ..Default::default()
+            (true, true) => None,
+        };
+        if let Some((kind, failure)) = change {
+            differences += 1;
+            failures += usize::from(failure);
+            eprintln!(
+                "DIFF {kind:<12} {:>3} {:<5} {}x{} mismatch {} -> {} {}",
+                clips[c].n,
+                f[1],
+                f[4],
+                f[5],
+                f[11],
+                if row.ok {
+                    format!(
+                        "{}x{} mismatch {}",
+                        row.size.0,
+                        row.size.1,
+                        row.mismatch.map_or("-".into(), |v| format!("{v:.3}"))
+                    )
+                } else {
+                    format!("ERR {}", row.message)
                 },
-            };
-            let started = Instant::now();
-            match run(
-                &ffmpeg,
-                990000 + n as u64 * 10 + k as u64,
-                &job,
-                &AtomicBool::new(false),
-                |_, _| {},
-            ) {
-                Ok(out) => {
-                    eprintln!(
-                        "BENCH {n} {name} {}: OK{} {:?} {:?} frames {} range {:.2}-{:.2} conf {:.2} omitted {} {:.1}s",
-                        if range.is_some() { "range" } else { "auto " },
-                        if out.forced { " FORCED" } else { "" },
-                        out.method,
-                        out.dimensions,
-                        out.frames,
-                        out.range.0,
-                        out.range.1,
-                        out.confidence,
-                        out.omitted_frames,
-                        started.elapsed().as_secs_f32()
-                    );
-                    out.preview
-                        .save(out_dir.join(format!("{n}-{k}.png")))
-                        .unwrap();
-                }
-                Err(e) => eprintln!(
-                    "BENCH {n} {name} {}: ERR {:.1}s {e:#}",
-                    if range.is_some() { "range" } else { "auto " },
-                    started.elapsed().as_secs_f32()
-                ),
-            }
+                clips[c].key
+            );
         }
     }
+    eprintln!(
+        "SUMMARY {differences} differences from the baseline, {failures} of them regressions"
+    );
+    assert!(
+        failures == 0 || std::env::var_os("WEEBSHOT_BENCH_STRICT").is_none(),
+        "{failures} regressions from the baseline"
+    );
 }
 
 /// A character cel that pans slower than its background. The layered method

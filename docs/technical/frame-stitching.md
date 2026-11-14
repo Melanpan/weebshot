@@ -324,6 +324,24 @@ compression noise, low detail, limits and cancellation. Tests also cover frame d
 restoration and gaps. The slow-pan test reports timing and, on Linux, process peak RSS
 from `VmHWM`, which excludes FFmpeg child processes.
 
+The ignored `local_footage_benchmark` runs a list of local clips (`WEEBSHOT_BENCH`, one
+`path` or `path|in|out` per line) three ways each: the whole window marked In/Out,
+Automatic with the playhead at the window start (where it rests after a clip is opened),
+and Automatic from the midpoint. It runs stitches in parallel and writes previews and
+`results.tsv` to `WEEBSHOT_BENCH_OUT`. For translation results it also records a seam
+mismatch: the share of pixels in consecutive frames' overlap that differ by more than 24
+grey levels. Animation inside an overlap counts, so the figure ranks results rather than
+proving a fault. `WEEBSHOT_BENCH_BASELINE` names an earlier `results.tsv`; lost and gained
+results, size changes over 5% and seam changes over 0.02 are printed as `DIFF` lines, and
+`WEEBSHOT_BENCH_STRICT` fails the test when a result is lost or its seams get worse. Run it
+before and after any change to matching, discovery or thresholds.
+
+```sh
+WEEBSHOT_BENCH=/path/to/windows.txt WEEBSHOT_BENCH_OUT=/tmp/bench \
+WEEBSHOT_BENCH_BASELINE=/path/to/baseline.tsv WEEBSHOT_BENCH_STRICT=1 \
+  cargo test --release local_footage_benchmark -- --ignored --nocapture
+```
+
 When FFmpeg is available, tests generate lossless video fixtures for automatic and manual
 stitching, sample-grid equivalence after seeking, bounded native decode and aspect ratio.
 Linux CI installs FFmpeg. The ignored regressions below require the specific reported clip

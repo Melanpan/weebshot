@@ -16,6 +16,8 @@
   frames it found near the playhead.
 - **Auto Stitch depends less on where the playhead is.** If the movement nearest the playhead
   is not a stitchable pan, Automatic tries the other pans in its search window, nearest first.
+- **Alignment errors say what failed**: how many frames found no match, or matched in
+  position but differ in their outlines, with a suggestion for each case.
 - **Save PSD…** accepts about thirty full-HD frames (64 megapixels of layers), up from about
   thirteen. A ten-frame rotated stitch was already too large for the old limit.
 
