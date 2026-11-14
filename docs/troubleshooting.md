@@ -73,6 +73,13 @@ are probably set: these always take precedence. Clear them with
 [Alt+X](key:ClearInOut) to let Auto Stitch discover the boundaries. See
 [Auto Stitch](stitching.md) for the full workflow, settings, and performance notes.
 
+## Linux: native Wayland
+
+On Linux, Weebshot runs through XWayland when it's available. The windowing library's
+native Wayland backend can't receive files dropped from a file manager, and it can't bring
+new windows (Options, Help) to the front. To use native Wayland anyway, for example for
+sharper fractional scaling, start it with `WEEBSHOT_WAYLAND=1 weebshot`.
+
 ## Resetting everything
 
 Settings are stored in one file. Delete it while Weebshot is closed to start fresh:

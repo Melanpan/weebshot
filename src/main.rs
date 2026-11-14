@@ -95,6 +95,8 @@ fn main() -> eframe::Result {
         viewport,
         // The screenshot run must not read or write the user's window state.
         persist_window: script.is_none(),
+        #[cfg(target_os = "linux")]
+        event_loop_builder: prefer_x11(),
         ..Default::default()
     };
 
@@ -103,4 +105,20 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial_file, script)?))),
     )
+}
+
+/// winit's Wayland backend can't receive file drops from file managers and can't raise
+/// a window (`focus_window` is a no-op), so compositors' focus-stealing prevention
+/// opens Options/Help behind the editor. Run through XWayland instead when it's there;
+/// `WEEBSHOT_WAYLAND=1` opts back into native Wayland.
+#[cfg(target_os = "linux")]
+fn prefer_x11() -> Option<eframe::EventLoopBuilderHook> {
+    let wayland = std::env::var_os("WEEBSHOT_WAYLAND").is_some_and(|v| !v.is_empty() && v != "0");
+    if wayland || std::env::var_os("DISPLAY").is_none() {
+        return None;
+    }
+    Some(Box::new(|builder| {
+        use winit::platform::x11::EventLoopBuilderExtX11 as _;
+        builder.with_x11();
+    }))
 }

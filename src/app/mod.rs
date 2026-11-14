@@ -1648,8 +1648,20 @@ fn native_window(
     min_size: [f32; 2],
     mut add: impl FnMut(&mut egui::Ui),
 ) -> bool {
+    let viewport_id = egui::ViewportId::from_hash_of(id);
+    // Raise the window when it opens (it wasn't shown last frame): some window managers
+    // otherwise leave a new window behind the one that was clicked to open it.
+    let frame = ctx.cumulative_frame_nr();
+    let last_shown = egui::Id::unique(("native_window_last_frame", id));
+    let opened = ctx
+        .data(|d| d.get_temp::<u64>(last_shown))
+        .is_none_or(|last| last + 1 < frame);
+    ctx.data_mut(|d| d.insert_temp(last_shown, frame));
+    if opened {
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Focus);
+    }
     ctx.show_viewport_immediate(
-        egui::ViewportId::from_hash_of(id),
+        viewport_id,
         // A missing app id makes Wayland compositors treat these as unrelated
         // windows, so focus-stealing prevention can leave them behind the editor.
         egui::ViewportBuilder::default()

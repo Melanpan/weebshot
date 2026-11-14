@@ -804,6 +804,11 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
     let frame = 1.0 / d.fps;
     let range = (d.in_point.is_some() || d.out_point.is_some())
         .then(|| (d.in_point.unwrap_or(0.0), d.out_point.unwrap_or(duration)));
+    // The playhead's handle in the ruler; grabbing it scrubs, even inside the range
+    // band (which would otherwise move the selection).
+    let near_head = |pos: egui::Pos2| {
+        pos.y <= ruler.bottom() && track.x_range().contains(hx) && (pos.x - hx).abs() <= 7.0
+    };
     let in_range_band = |pos: egui::Pos2| {
         range.is_some_and(|(a, b)| {
             pos.y <= ruler.bottom() && pos.x > x_of(a) + 6.0 && pos.x < x_of(b) - 6.0
@@ -862,6 +867,8 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
         {
             if near_in(h.x) || near_out(h.x) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            } else if near_head(h) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             } else if in_range_band(h) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             } else if near_cue_edge(h).is_some() {
@@ -887,6 +894,8 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
                 Drag::In
             } else if near_out(pos.x) {
                 Drag::Out
+            } else if near_head(pos) {
+                Drag::Scrub
             } else if in_range_band(pos) {
                 let (a, b) = range.unwrap();
                 Drag::Range {

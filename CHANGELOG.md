@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Dragging the playhead inside an In/Out selection** now scrubs. Before, grabbing it in the
+  ruler moved the whole selection.
+- **Linux on Wayland**: dropping files from a file manager now opens them, and Options/Help
+  windows open in front of the editor. Weebshot now runs through XWayland when it's available;
+  set `WEEBSHOT_WAYLAND=1` to use native Wayland (no file drops there).
+
 ## 0.4.0 — 2026-11-11
 
 ### New
