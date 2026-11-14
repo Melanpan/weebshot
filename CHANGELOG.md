@@ -9,8 +9,17 @@
   best-guess shift instead of failing. The preview is marked **Forced · unverified**; save it
   as PSD to move and mask the frames by hand. MCP: `force` on `stitch_create`.
 
+- **Even out lighting between frames** (Advanced, on by default). Shots with a glow, vignette
+  or haze fixed to the screen no longer show faint jagged bands at every seam: each frame's
+  broad colour is matched to the frames before it, while lines and texture keep their source
+  pixels.
+- **Small results are marked** in the preview when a stitch is less than 10% larger than a
+  single frame, and Automatic looks past them for a larger pan in its search window.
+
 ### Fixed
 
+- **Auto Stitch fails faster** on footage it cannot stitch: analysis frames are decoded once
+  and shared between attempts.
 - **Auto Stitch right after opening a clip** no longer reports "No camera movement detected"
   when the camera is already moving on the first frame. Discovery now starts from the moving
   frames it found near the playhead.

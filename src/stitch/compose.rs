@@ -1,5 +1,7 @@
 //! Source-pixel composition with a minimum-disagreement seam through overlaps.
-//! Seam search is bounded to a small grid; final pixels are never resized/blended.
+//! Seam search is bounded to a small grid; final pixels are never resized or
+//! averaged between frames. Optionally each frame's broad colour is shifted to
+//! agree with the canvas before it is placed (`Composer::matched`).
 use super::check_cancel;
 use anyhow::{Result, bail};
 use image::{GrayImage, RgbImage, RgbaImage};
@@ -149,6 +151,152 @@ impl Composer {
         self.covered = Some(self.covered.map_or(rect, |r| r.union(rect)));
         self.previous = Some(rect);
         Ok(())
+    }
+
+    /// `frame` with its broad colour shifted to agree with what the canvas
+    /// already holds, or `None` when nothing needs to change.
+    ///
+    /// Shots often carry lighting fixed to the screen instead of the artwork
+    /// (a vignette, a glow, a haze gradient), so the same artwork differs by
+    /// a few levels between frames and every seam shows as a step. The
+    /// difference is measured per cell where the frame overlaps the canvas,
+    /// ignoring cells that mostly disagree (animation), smoothed, carried
+    /// into the newly revealed area with a falloff, and added back. Only
+    /// that smooth field changes: lines and texture keep their source pixels.
+    pub fn matched(
+        &self,
+        frame: &RgbImage,
+        mask: Option<&GrayImage>,
+        offset: (u32, u32),
+        cancel: &AtomicBool,
+    ) -> Result<Option<RgbImage>> {
+        const CELL: u32 = 16;
+        // Differences beyond this are a different drawing, not lighting.
+        const OUTLIER: i32 = 40;
+        const LIMIT: f32 = 32.0;
+        let (w, h) = frame.dimensions();
+        if self.covered.is_none()
+            || offset.0 + w > self.canvas.width()
+            || offset.1 + h > self.canvas.height()
+        {
+            return Ok(None);
+        }
+        let (gw, gh) = (w.div_ceil(CELL) as usize, h.div_ceil(CELL) as usize);
+        let mut field = vec![[0.0f32; 3]; gw * gh];
+        let mut known = vec![false; gw * gh];
+        for gy in 0..gh {
+            check_cancel(cancel)?;
+            for gx in 0..gw {
+                let (mut sum, mut agree, mut seen) = ([0i32; 3], 0u32, 0u32);
+                for y in (gy as u32 * CELL..((gy as u32 + 1) * CELL).min(h)).step_by(2) {
+                    for x in (gx as u32 * CELL..((gx as u32 + 1) * CELL).min(w)).step_by(2) {
+                        let old = self.canvas.get_pixel(offset.0 + x, offset.1 + y);
+                        if old[3] == 0 || mask.is_some_and(|m| m.get_pixel(x, y)[0] == 0) {
+                            continue;
+                        }
+                        seen += 1;
+                        let new = frame.get_pixel(x, y);
+                        let d = [0, 1, 2].map(|c| i32::from(old[c]) - i32::from(new[c]));
+                        if d.iter().all(|d| d.abs() < OUTLIER) {
+                            agree += 1;
+                            for c in 0..3 {
+                                sum[c] += d[c];
+                            }
+                        }
+                    }
+                }
+                // A cell on the canvas edge or one that mostly disagrees says
+                // nothing reliable about lighting.
+                if seen >= CELL * CELL / 8 && agree * 4 >= seen * 3 {
+                    let i = gy * gw + gx;
+                    known[i] = true;
+                    field[i] = sum.map(|v| (v as f32 / agree as f32).clamp(-LIMIT, LIMIT));
+                }
+            }
+        }
+        if !known.iter().any(|&k| k) || field.iter().all(|v| v.iter().all(|c| c.abs() < 0.5)) {
+            return Ok(None);
+        }
+        // Distance in cells from the measured area, and each unmeasured cell's
+        // value from its already-filled neighbours.
+        let mut distance = vec![u32::MAX; gw * gh];
+        let mut queue: std::collections::VecDeque<usize> = (0..gw * gh)
+            .filter(|&i| known[i])
+            .inspect(|&i| distance[i] = 0)
+            .collect();
+        let neighbours = |i: usize| {
+            let (x, y) = (i % gw, i / gw);
+            [
+                (x > 0).then(|| i - 1),
+                (x + 1 < gw).then_some(i + 1),
+                (y > 0).then(|| i - gw),
+                (y + 1 < gh).then_some(i + gw),
+            ]
+            .into_iter()
+            .flatten()
+        };
+        while let Some(i) = queue.pop_front() {
+            for n in neighbours(i) {
+                if distance[n] == u32::MAX {
+                    distance[n] = distance[i] + 1;
+                    let (mut sum, mut count) = ([0.0f32; 3], 0.0f32);
+                    for m in neighbours(n).filter(|&m| distance[m] <= distance[i]) {
+                        for c in 0..3 {
+                            sum[c] += field[m][c];
+                        }
+                        count += 1.0;
+                    }
+                    field[n] = sum.map(|v| v / count);
+                    queue.push_back(n);
+                }
+            }
+        }
+        // Let go of the correction over a third of the frame beyond the
+        // measured area, so a new strip joins smoothly but lighting is not
+        // dragged across the whole stitch.
+        let reach = (gw.max(gh) / 3).max(2) as f32;
+        for (value, &d) in field.iter_mut().zip(&distance) {
+            let t = (1.0 - d as f32 / reach).clamp(0.0, 1.0);
+            let falloff = t * t * (3.0 - 2.0 * t);
+            *value = value.map(|v| v * falloff);
+        }
+        // Smooth cell-to-cell noise and the fill pattern.
+        for _ in 0..3 {
+            let previous = field.clone();
+            for i in 0..gw * gh {
+                let (mut sum, mut count) = (previous[i], 1.0f32);
+                for n in neighbours(i) {
+                    for c in 0..3 {
+                        sum[c] += previous[n][c];
+                    }
+                    count += 1.0;
+                }
+                field[i] = sum.map(|v| v / count);
+            }
+        }
+        let mut out = frame.clone();
+        let cell = CELL as f32;
+        for y in 0..h {
+            if y % 64 == 0 {
+                check_cancel(cancel)?;
+            }
+            let fy = ((y as f32 + 0.5) / cell - 0.5).clamp(0.0, (gh - 1) as f32);
+            let (y0, ty) = (fy as usize, fy.fract());
+            let y1 = (y0 + 1).min(gh - 1);
+            for x in 0..w {
+                let fx = ((x as f32 + 0.5) / cell - 0.5).clamp(0.0, (gw - 1) as f32);
+                let (x0, tx) = (fx as usize, fx.fract());
+                let x1 = (x0 + 1).min(gw - 1);
+                let pixel = out.get_pixel_mut(x, y);
+                for c in 0..3 {
+                    let top = field[y0 * gw + x0][c] * (1.0 - tx) + field[y0 * gw + x1][c] * tx;
+                    let bottom = field[y1 * gw + x0][c] * (1.0 - tx) + field[y1 * gw + x1][c] * tx;
+                    let shift = top * (1.0 - ty) + bottom * ty;
+                    pixel[c] = (f32::from(pixel[c]) + shift).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        Ok(Some(out))
     }
 
     fn seam(

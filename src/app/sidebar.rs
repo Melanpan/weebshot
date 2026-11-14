@@ -304,6 +304,8 @@ impl App {
                 if adaptive {
                     ui.checkbox(&mut stitch.allow_pauses, "Allow short pan pauses");
                 }
+                ui.checkbox(&mut stitch.even_seams, "Even out lighting between frames")
+                    .on_hover_text("Shots often have a glow, vignette or haze fixed to the screen, so the same artwork is slightly brighter in one frame than the next and seams show as bands. This shifts each frame's broad colour to match its neighbours. Lines and texture are not blended. Turn off to keep every pixel exactly as in the source.");
             });
         });
     }

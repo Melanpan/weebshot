@@ -201,5 +201,6 @@ pub(super) fn recipe(
         split: None,
         method: Method::Translation,
         forced: true,
+        even_seams: options.even_seams,
     })
 }

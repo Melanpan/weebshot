@@ -231,9 +231,15 @@ impl State {
             );
         });
         ui.add_space(6.0);
-        if out.forced || out.omitted_frames > 0 || out.search_limited || out.range_trimmed {
+        let small = out.gain < crate::stitch::SMALL_GAIN;
+        if out.forced || small || out.omitted_frames > 0 || out.search_limited || out.range_trimmed
+        {
             let title = match (out.omitted_frames, out.search_limited) {
                 _ if out.forced => "Forced result · Alignment not verified".to_string(),
+                _ if small => format!(
+                    "Small result · Only {:.0}% larger than one frame",
+                    out.gain.max(0.0) * 100.0
+                ),
                 (0, false) => "Marked range shortened · Coherent pan retained".to_string(),
                 (0, true) => "Search limit reached · Pan may continue".to_string(),
                 (n, true) => format!(

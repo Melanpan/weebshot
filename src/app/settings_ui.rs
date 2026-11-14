@@ -52,7 +52,7 @@ settings! {
     Ffmpeg, Export, "External tools", "FFmpeg executable", "Detected version, path and executable selection.", "binary tools browse auto-detect";
     Gifsicle, Export, "External tools", "Gifsicle executable", "Optional tool for smaller GIFs.", "binary tools browse auto-detect path";
     Stitch, Export, "Auto Stitch", "Stitch method", "Combine clean source frames into a panorama. Force a result builds a rough stitch when alignment fails.", "stitching frames automatic translation layers motion divider foreground background force low confidence unverified rough";
-    StitchAdvanced, Export, "Auto Stitch", "Advanced stitch options", "Frame spacing, analysis frames per second, search window and pan pauses.", "sampling fps travel panorama stitching seconds";
+    StitchAdvanced, Export, "Auto Stitch", "Advanced stitch options", "Frame spacing, analysis frames per second, search window, pan pauses and evening out lighting between frames.", "sampling fps travel panorama stitching seconds seam bands brightness streaks vignette glow blend";
     H264, Export, "Video encoding", "H.264 preset", "Slower presets give smaller MP4/MKV files at the same quality.", "x264 encoder compression speed";
     Vp9, Export, "Video encoding", "VP9 speed", "WebM encoding: 0 is best quality, 5 is fastest.", "encoder compression performance";
     Hardware, Export, "Hardware encoding", "Hardware encoding", "Detect GPU encoders and select one for MP4/MKV.", "acceleration NVENC VAAPI AMF QSV encoder graphics availability";

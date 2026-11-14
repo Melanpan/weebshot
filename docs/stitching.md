@@ -104,6 +104,7 @@ available in **Options → Export → Auto Stitch**.
 | Search in each direction | 15 seconds (6 seconds first, widened when the pan reaches that limit) |
 | Allow short pauses | Enabled (up to 0.75 seconds) |
 | Force a result | Off |
+| Even out lighting between frames | On |
 
 **Automatic** tries single translation first. If ordinary alignment fails, it can
 fall back to two vertical layers, then to shift, scale and rotation. **Single translation** uses one shift per
@@ -150,6 +151,12 @@ Shift, scale and rotation supports a uniform zoom and camera roll of up to about
 separation of overlapping silhouettes remain unsupported.
 Confidence measures agreement with the selected motion model. Inspect faces, line art, and overlaps before saving.
 Pixels in overlaps come from individual source frames, without repeated averaging.
+Many shots carry lighting that is fixed to the screen instead of the artwork (a glow,
+a vignette, a haze gradient), so the same artwork is a few levels brighter in one frame
+than in the next and each seam would show as a faint band. **Even out lighting between
+frames** (Advanced, on by default) shifts each frame's broad colour to match the frames
+already placed. Lines and texture are untouched; turn it off to keep every pixel exactly
+as in the source.
 Overlap boundaries favour matching areas and avoid connected moving regions where
 possible, reducing cuts through changing poses.
 Diagonal paths can leave transparent corners.

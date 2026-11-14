@@ -140,6 +140,21 @@ This preserves line detail and avoids ghosting from repeated averaging. If the o
 offers no clean path around a moving region, the seam can remain visible. The preview
 lets the user inspect the result and try a different set of frames.
 
+### Evening out lighting
+
+Compositing effects fixed to the screen (vignettes, glows, haze gradients) make the same
+artwork differ by a few levels between frames, which a hard seam shows as a step. Before
+a frame is placed, `Composer::matched` measures the mean colour difference between the
+canvas and the frame in 16-pixel cells of their overlap. Pixels differing by 40 levels or
+more are a different drawing and are ignored, and a cell where more than a quarter of the
+pixels disagree is not used. The cell values are limited to ±32 levels, extended into the
+newly revealed area from their nearest measured neighbours with a falloff over a third of
+the frame, smoothed, interpolated per pixel and added to the frame. Only this smooth field
+changes, so lines keep their source pixels, and frames that already agree are passed
+through untouched. The corrected frame is what the seam search, the canvas and the PSD
+layers receive, so layers still rebuild the merged image exactly. The Layered (two planes)
+compositor does not use it.
+
 ## Frame choices, preview and export
 
 Alignment produces a reusable recipe containing the source path, sample grid,

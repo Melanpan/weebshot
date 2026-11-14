@@ -33,6 +33,10 @@ const MAX_EDGE: u32 = 16384;
 /// Edge agreement at which the oldest overlapping reference is accepted
 /// without comparing newer ones.
 const STRONG_EDGE_AGREEMENT: f32 = 0.7;
+/// A stitch whose canvas is less than this much larger than one frame adds
+/// little to a screenshot. Measured on local footage, two-frame results add
+/// 3 to 11 percent and real pans from about 11 percent upward.
+pub const SMALL_GAIN: f32 = 0.10;
 /// Further pans Automatic tries after the one nearest the playhead fails.
 const MAX_ALTERNATIVES: usize = 3;
 /// Seconds searched on each side of the playhead before widening.
@@ -84,6 +88,9 @@ pub struct Options {
     /// When every checked method refuses, build an unverified translation-only
     /// stitch for manual repair instead of failing.
     pub force: bool,
+    /// Even out lighting that differs between frames (vignettes, glows), which
+    /// otherwise shows as a brightness step at every seam.
+    pub even_seams: bool,
     // Advanced matching thresholds.
     pub pause_seconds: f64,
     pub min_travel: f32,
@@ -136,6 +143,7 @@ impl Default for Options {
             min_travel: 0.025,
             selection_travel: 0.08,
             force: false,
+            even_seams: true,
             thresholds: Default::default(),
             native_thresholds: motion::Thresholds {
                 max_error: 8.0,
@@ -215,6 +223,8 @@ pub struct Recipe {
     method: Method,
     /// Built by the unchecked fallback; alignment was not verified.
     forced: bool,
+    /// Shift each frame's broad colour to agree with the frames before it.
+    even_seams: bool,
 }
 
 pub struct Output {
@@ -232,6 +242,8 @@ pub struct Output {
     pub range_trimmed: bool,
     /// The checked methods refused and "Force a result" built this anyway.
     pub forced: bool,
+    /// Canvas area beyond a single source frame, as a fraction of that frame.
+    pub gain: f32,
     pub range: (f64, f64),
     pub elapsed: f32,
     pub recipe: Arc<Recipe>,
@@ -525,13 +537,60 @@ pub fn run(
     // different directions, a stretch that cannot be aligned), the pans inside
     // it are tried, largest first, and the result reports the shortened range.
     let tried = std::cell::Cell::new(None);
+    let analyses = std::cell::RefCell::new(Analyses::default());
     let mut skip: Vec<(f64, f64)> = Vec::new();
     let mut first_error = None;
+    let mut small: Option<Output> = None;
     for attempt in 0..=MAX_ALTERNATIVES {
         tried.set(None);
         let alternatives = (attempt > 0).then_some(skip.as_slice());
-        match solve(ffmpeg, id, job, alternatives, &tried, cancel, &report) {
+        match solve(
+            ffmpeg,
+            id,
+            job,
+            alternatives,
+            &tried,
+            &analyses,
+            cancel,
+            &report,
+        ) {
+            // A result that adds little to a single frame is set aside while
+            // the other pans in the window are tried: a small movement near the
+            // playhead should not hide the real pan a second later. A marked
+            // range is the user's choice and is returned as it is.
+            Ok(mut output)
+                if job.range.is_none() && output.gain < SMALL_GAIN && tried.get().is_some() =>
+            {
+                crate::log::log(
+                    crate::log::Level::Debug,
+                    "stitch",
+                    format!(
+                        "attempt {attempt} on {:?} adds only {:.0}%; looking further",
+                        tried.get(),
+                        output.gain * 100.0
+                    ),
+                );
+                if small
+                    .as_ref()
+                    .is_none_or(|kept: &Output| output.gain > kept.gain)
+                {
+                    // Later attempts write the same preview path; park this one.
+                    drop(small.take());
+                    let parked = Arc::get_mut(&mut output.artifact).and_then(|artifact| {
+                        let path = artifact.0.with_extension("small.png");
+                        std::fs::rename(&artifact.0, &path).ok()?;
+                        artifact.0 = path;
+                        Some(())
+                    });
+                    if parked.is_none() {
+                        output.elapsed = started.elapsed().as_secs_f32();
+                        return Ok(output);
+                    }
+                    small = Some(output);
+                }
+            }
             Ok(mut output) => {
+                drop(small);
                 output.elapsed = started.elapsed().as_secs_f32();
                 return Ok(output);
             }
@@ -553,6 +612,10 @@ pub fn run(
             None if attempt > 0 => break,
             None => {}
         }
+    }
+    if let Some(mut output) = small {
+        output.elapsed = started.elapsed().as_secs_f32();
+        return Ok(output);
     }
     let error = first_error.unwrap();
     if !job.options.force {
@@ -595,15 +658,144 @@ pub fn run(
     }
 }
 
+/// Downscaled frames of one window at one rate, with the motion between
+/// consecutive frames. `discovery` also finds pans too slow to register
+/// between adjacent samples.
+struct Analysis {
+    frames: Vec<GrayImage>,
+    motions: Vec<Option<motion::Motion>>,
+    discovery: Vec<Option<motion::Motion>>,
+}
+
+type Size = (u32, u32);
+
+/// Analyses already decoded for this job. Every attempt after the first asks
+/// for the same windows and rates, so only the first pays for decoding.
+#[derive(Default)]
+struct Analyses {
+    /// Start time, native size and pixel aspect of the first decoded frame.
+    first: Option<(u64, Size, Size)>,
+    samples: Vec<([u64; 3], Arc<Analysis>)>,
+}
+
+impl Analyses {
+    /// Frames kept across all cached analyses (about 58 kB each at 320×180).
+    const MAX_FRAMES: usize = 2 * MAX_SAMPLES;
+
+    /// Native size and pixel aspect of the frame at `start`.
+    fn first(
+        &mut self,
+        ffmpeg: &std::path::Path,
+        job: &Job,
+        start: f64,
+        cancel: &AtomicBool,
+        report: &impl Fn(f32, &'static str),
+    ) -> Result<(Size, Size)> {
+        if let Some((key, native, aspect)) = self.first
+            && key == start.to_bits()
+        {
+            return Ok((native, aspect));
+        }
+        report(0.0, "Analysing camera pan");
+        let (first, aspect) = decode::frame(ffmpeg, &job.input, start, cancel)?;
+        self.first = Some((start.to_bits(), first.dimensions(), aspect));
+        Ok((first.dimensions(), aspect))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn samples(
+        &mut self,
+        ffmpeg: &std::path::Path,
+        job: &Job,
+        options: &Options,
+        (start, end): (f64, f64),
+        fps: f64,
+        size: (u32, u32),
+        cancel: &AtomicBool,
+        report: &impl Fn(f32, &'static str),
+    ) -> Result<Arc<Analysis>> {
+        let key = [start.to_bits(), end.to_bits(), fps.to_bits()];
+        if let Some((_, analysis)) = self.samples.iter().find(|(k, _)| *k == key) {
+            return Ok(analysis.clone());
+        }
+        let mut frames = Vec::new();
+        decode::samples(ffmpeg, &job.input, start, end, fps, size, cancel, |f| {
+            if frames.len() >= MAX_SAMPLES {
+                bail!("Too many analysis frames. Reduce the selected range or sampling rate.");
+            }
+            frames.push(f);
+            report(
+                0.15 * (frames.len() as f32 / ((end - start) * fps) as f32).min(1.0),
+                "Decoding analysis frames",
+            );
+            Ok(())
+        })?;
+        if frames.len() < 2 {
+            bail!("The range is too short to stitch");
+        }
+        let mut motions = Vec::new();
+        let mut discovery = Vec::new();
+        if options.method != Method::TwoVerticalLayers {
+            for i in 1..frames.len() {
+                check_cancel(cancel)?;
+                motions.push(motion::estimate(
+                    &frames[i - 1],
+                    &frames[i],
+                    &options.thresholds,
+                ));
+                report(
+                    0.15 + 0.25 * i as f32 / frames.len() as f32,
+                    "Detecting motion and scene boundaries",
+                );
+            }
+            // A slow pan can move less than half an analysis pixel per sample. Use
+            // a longer baseline for discovery across reliable adjacent holds. Position
+            // solving still uses original pairs and nonadjacent reference checks.
+            discovery = motions.clone();
+            let baseline = (fps * 0.5).ceil().max(2.0) as usize;
+            for i in 0..motions.len() {
+                check_cancel(cancel)?;
+                let j = (i + baseline).min(frames.len() - 1);
+                if j - i == baseline
+                    && motions[i..j]
+                        .iter()
+                        .all(|m| m.is_some_and(|m| m.reliable(&options.thresholds) && !m.moving()))
+                {
+                    let m = motion::refine(&frames[i], &frames[j], (0, 0), 4, &options.thresholds);
+                    if m.reliable(&options.thresholds) && m.moving() {
+                        discovery[i] = Some(m);
+                    }
+                }
+            }
+        }
+        let analysis = Arc::new(Analysis {
+            frames,
+            motions,
+            discovery,
+        });
+        self.samples.push((key, analysis.clone()));
+        // Drop the oldest analyses beyond the frame budget.
+        let total = |samples: &[([u64; 3], Arc<Analysis>)]| -> usize {
+            samples.iter().map(|(_, a)| a.frames.len()).sum()
+        };
+        while self.samples.len() > 1 && total(&self.samples) > Self::MAX_FRAMES {
+            self.samples.remove(0);
+        }
+        Ok(analysis)
+    }
+}
+
 /// One attempt. `skip` is `None` for the pan nearest the playhead; otherwise
 /// it lists the time spans already attempted and the nearest remaining pan is
 /// used. `tried` receives the span this attempt settled on.
+#[allow(clippy::too_many_arguments)]
 fn solve(
     ffmpeg: &std::path::Path,
     id: u64,
     job: &Job,
     skip: Option<&[(f64, f64)]>,
     tried: &std::cell::Cell<Option<(f64, f64)>>,
+    analyses: &std::cell::RefCell<Analyses>,
     cancel: &AtomicBool,
     report: &impl Fn(f32, &'static str),
 ) -> Result<Output> {
@@ -642,76 +834,51 @@ fn solve(
         .sampling_fps
         .clamp(2.0, 16.0)
         .min(job.source_fps.max(2.0));
-    report(0.0, "Analysing camera pan");
-    let (first, aspect) = decode::frame(ffmpeg, &job.input, start, cancel)?;
-    let native = first.dimensions();
-    drop(first);
+    let (native, aspect) = analyses
+        .borrow_mut()
+        .first(ffmpeg, job, start, cancel, report)?;
     let scale = 320.0 / native.0.max(native.1) as f64;
     let size = (
         (native.0 as f64 * scale).round().max(24.0) as u32,
         (native.1 as f64 * scale).round().max(24.0) as u32,
     );
     let mut fps = initial_fps;
-    let (frames, motions, candidate) = loop {
-        let mut frames = Vec::new();
-        decode::samples(ffmpeg, &job.input, start, end, fps, size, cancel, |f| {
-            if frames.len() >= MAX_SAMPLES {
-                bail!("Too many analysis frames. Reduce the selected range or sampling rate.");
-            }
-            frames.push(f);
-            report(
-                0.15 * (frames.len() as f32 / ((end - start) * fps) as f32).min(1.0),
-                "Decoding analysis frames",
-            );
-            Ok(())
-        })?;
-        if frames.len() < 2 {
-            bail!("The range is too short to stitch");
-        }
+    let (analysis, candidate) = loop {
+        let analysis = analyses.borrow_mut().samples(
+            ffmpeg,
+            job,
+            options,
+            (start, end),
+            fps,
+            size,
+            cancel,
+            report,
+        )?;
+        let (frames, motions, discovery) =
+            (&analysis.frames, &analysis.motions, &analysis.discovery);
         // Shift, scale and rotation reuses translation discovery below to pick
         // the sampling rate and the pan's extent.
         if matches!(options.method, Method::TwoVerticalLayers) {
-            break (frames, Vec::new(), None);
-        }
-        let mut motions = Vec::new();
-        for i in 1..frames.len() {
-            check_cancel(cancel)?;
-            motions.push(motion::estimate(
-                &frames[i - 1],
-                &frames[i],
-                &options.thresholds,
-            ));
-            report(
-                0.15 + 0.25 * i as f32 / frames.len() as f32,
-                "Detecting motion and scene boundaries",
-            );
-        }
-        // A slow pan can move less than half an analysis pixel per sample. Use
-        // a longer baseline for discovery across reliable adjacent holds. Position
-        // solving still uses original pairs and nonadjacent reference checks.
-        let mut discovery = motions.clone();
-        let baseline = (fps * 0.5).ceil().max(2.0) as usize;
-        for i in 0..motions.len() {
-            check_cancel(cancel)?;
-            let j = (i + baseline).min(frames.len() - 1);
-            if j - i == baseline
-                && motions[i..j]
-                    .iter()
-                    .all(|m| m.is_some_and(|m| m.reliable(&options.thresholds) && !m.moving()))
-            {
-                let m = motion::refine(&frames[i], &frames[j], (0, 0), 4, &options.thresholds);
-                if m.reliable(&options.thresholds) && m.moving() {
-                    discovery[i] = Some(m);
-                }
-            }
+            break (analysis, None);
         }
         let seed = (((job.playhead - start) * fps).round() as usize).min(frames.len() - 1);
+        // A region includes the holds around its pan, so two pans separated
+        // by a short hold share still frames. Identify a region by the time
+        // span of its moving pairs only.
+        let span = |(mut lo, mut hi): (usize, usize)| {
+            let moving = |i: usize| discovery[i].is_some_and(|m| m.moving());
+            while lo < hi && !moving(lo) {
+                lo += 1;
+            }
+            while hi > lo && !moving(hi - 1) {
+                hi -= 1;
+            }
+            (start + lo as f64 / fps, start + hi as f64 / fps)
+        };
         let candidate = if let Some(skip) = skip {
-            let span =
-                |(lo, hi): (usize, usize)| (start + lo as f64 / fps, start + hi as f64 / fps);
             // Inside a marked range the playhead means nothing: take the pan
             // that reveals the most first.
-            other_regions(&discovery, job.range.is_none().then_some(seed), options, fps, size)
+            other_regions(discovery, job.range.is_none().then_some(seed), options, fps, size)
                 .into_iter()
                 .find(|&r| {
                     let (a, b) = span(r);
@@ -721,7 +888,7 @@ fn solve(
         } else if job.range.is_some() {
             Ok((0, frames.len() - 1))
         } else {
-            region(&discovery, seed, options, fps)
+            region(discovery, seed, options, fps)
         };
         let bad = candidate.as_ref().is_err()
             || candidate.as_ref().is_ok_and(|&(lo, hi)| {
@@ -750,7 +917,7 @@ fn solve(
         // keeps its longest coherent run; the preview reports the shortening.
         let candidate = match candidate {
             Ok(_) if job.range.is_some() && bad => {
-                Ok(best_segment(&motions, size, &options.thresholds)
+                Ok(best_segment(motions, size, &options.thresholds)
                     .unwrap_or((0, frames.len() - 1)))
             }
             other => other,
@@ -759,10 +926,11 @@ fn solve(
             && (job.range.is_none() || skip.is_some())
             && hi > lo
         {
-            tried.set(Some((start + lo as f64 / fps, start + hi as f64 / fps)));
+            tried.set(Some(span((lo, hi))));
         }
-        break (frames, motions, Some(candidate));
+        break (analysis, Some(candidate));
     };
+    let (frames, motions) = (&analysis.frames, &analysis.motions);
     let analysed = frames.len();
     let base_recipe = || Recipe {
         frames: Vec::new(),
@@ -779,6 +947,7 @@ fn solve(
         split: None,
         method: Method::Translation,
         forced: false,
+        even_seams: options.even_seams,
     };
     let compose_recipe = |recipe: Recipe| -> Result<Output> {
         let recipe = Arc::new(recipe);
@@ -794,7 +963,7 @@ fn solve(
             return Ok(None);
         }
         report(0.65, "Checking for independently moving layers");
-        layers::recipe(&frames, base_recipe(), ffmpeg, options, cancel, &report)?
+        layers::recipe(frames, base_recipe(), ffmpeg, options, cancel, &report)?
             .map(compose_recipe)
             .transpose()
     };
@@ -905,7 +1074,7 @@ fn solve(
         if hi <= lo {
             bail!("No camera movement detected. Try marking In and Out around the pan.");
         }
-        let points = positions(&frames, &motions, lo, hi, cancel, options)?;
+        let points = positions(frames, motions, lo, hi, cancel, options)?;
         let (dx, dy) = points.last().unwrap().delta(points[0]);
         if (dx.abs() as f32 / size.0 as f32).max(dy.abs() as f32 / size.1 as f32)
             < options.min_travel
@@ -1090,7 +1259,6 @@ fn solve(
         return fallback()?.with_context(|| format!("{error} What failed: {cause}"));
     };
     let keep: Vec<_> = (0..selected.len()).filter(|&n| groups[n] == best).collect();
-    drop(frames);
     let confidence = keep.iter().map(|&n| qualities[n]).fold(1.0f32, f32::min);
     let recipe = Arc::new(Recipe {
         frames: keep
@@ -1120,6 +1288,7 @@ fn solve(
         split: None,
         method: Method::Translation,
         forced: false,
+        even_seams: options.even_seams,
     });
     let included = vec![true; recipe.frames.len()];
     let mut out = recompose(ffmpeg, id, recipe, included, cancel, |fraction, stage| {
@@ -1256,6 +1425,12 @@ fn compose_frames(
                 } else {
                     &rgb
                 };
+                let evened = if recipe.even_seams {
+                    composer.matched(frame, mask.as_ref(), offset, cancel)?
+                } else {
+                    None
+                };
+                let frame = evened.as_ref().unwrap_or(frame);
                 composer.push(frame, mask.as_ref(), offset, cancel)?;
                 if retain_layers {
                     let origin = if recipe.split.is_some() {
@@ -1377,8 +1552,19 @@ pub fn recompose(
     let trimmed = recipe.trimmed && recipe.omitted == 0;
     let omitted = recipe.omitted;
     let excluded = recipe.frames.len() - selected.len();
+    let gain = (u64::from(dimensions.0) * u64::from(dimensions.1)) as f32
+        / (u64::from(native.0) * u64::from(native.1)) as f32
+        - 1.0;
     let warning = format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}{}{}",
+        if gain < SMALL_GAIN {
+            format!(
+                "Small result: the stitch is only {:.0}% larger than a single frame. ",
+                gain.max(0.0) * 100.0
+            )
+        } else {
+            String::new()
+        },
         if recipe.forced {
             "Forced result: these frames did not pass the alignment checks, so they are placed by their best-guess shift only. Expect seams and doubled artwork; save as PSD to move and mask the frames by hand. "
         } else {
@@ -1436,6 +1622,7 @@ pub fn recompose(
         warning,
         method: recipe.method,
         omitted_frames: omitted,
+        gain,
         search_limited: truncated,
         range_trimmed: trimmed,
         forced: recipe.forced,

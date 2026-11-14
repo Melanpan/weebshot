@@ -2475,3 +2475,146 @@ fn other_regions_are_ordered_by_distance_and_need_travel() {
         vec![(3, 7), (8, 12)]
     );
 }
+
+/// A small camera movement under the playhead must not hide the real pan
+/// after it; when there is nothing larger, the small result is still
+/// returned and says so.
+#[test]
+fn small_result_gives_way_to_a_larger_pan() {
+    let ffmpeg = crate::export::find_tool("ffmpeg");
+    if std::process::Command::new(&ffmpeg)
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        eprintln!("FFmpeg unavailable; video fixture test skipped");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("weebshot-small-test-{}", std::process::id()));
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let source = artwork(384, 320);
+    // Three 2 px steps (6% of the frame height), then a hold.
+    let mut twitch: Vec<u32> = (0..4).map(|i| 10 + i * 2).collect();
+    twitch.extend([16; 10]);
+    let mut with_pan = twitch.clone();
+    with_pan.extend((1..=16).map(|i| 16 + i * 4));
+    let run_on = |name: &str, rows: &[u32], id: u64| {
+        let frames = dir.join(name);
+        std::fs::create_dir_all(&frames).unwrap();
+        for (i, y) in rows.iter().enumerate() {
+            crop(&source, 20, *y)
+                .save(frames.join(format!("{i:03}.png")))
+                .unwrap();
+        }
+        let video = dir.join(format!("{name}.mkv"));
+        let status = std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-framerate",
+                "8",
+                "-i",
+            ])
+            .arg(frames.join("%03d.png"))
+            .args(["-c:v", "ffv1"])
+            .arg(&video)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let job = Job {
+            input: video,
+            playhead: 0.0,
+            duration: rows.len() as f64 / 8.0,
+            range: None,
+            source_fps: 8.0,
+            options: Options::default(),
+        };
+        run(&ffmpeg, id, &job, &AtomicBool::new(false), |_, _| {}).unwrap()
+    };
+    let alone = run_on("twitch", &twitch, 910080);
+    assert_eq!(alone.dimensions, (128, 102));
+    assert!(alone.gain < SMALL_GAIN);
+    assert!(
+        alone.warning.starts_with("Small result"),
+        "{}",
+        alone.warning
+    );
+    assert!(alone.artifact.0.exists());
+    let larger = run_on("pan", &with_pan, 910081);
+    assert_eq!(larger.dimensions, (128, 96 + 64));
+    assert!(larger.gain > 0.6);
+    // The pan's region may start on the hold before it, but after the twitch.
+    assert!(larger.range.0 > 0.5, "{:?}", larger.range);
+    assert!(larger.artifact.0.exists());
+}
+
+/// Lighting fixed to the screen makes each frame brighter towards its bottom
+/// edge, so consecutive frames disagree by a constant amount where they
+/// overlap. Evening must remove the step at the seams without touching frames
+/// that already agree.
+#[test]
+fn screen_fixed_lighting_leaves_no_seam_step() {
+    let source = artwork(160, 400);
+    let frame = |y: u32, lit: bool| {
+        let mut frame = crop(&source, 16, y);
+        if lit {
+            for (_, row, pixel) in frame.enumerate_pixels_mut() {
+                let glow = (row * 30 / 95) as u8;
+                *pixel = Rgb(pixel.0.map(|v| (v / 2 + 40).saturating_add(glow)));
+            }
+        }
+        frame
+    };
+    let cancel = AtomicBool::new(false);
+    // Largest jump between neighbouring rows of the lighting that remains
+    // once the artwork is subtracted.
+    let step = |lit: bool, even: bool| {
+        let mut composer = compose::Composer::new((128, 96 + 4 * 32));
+        let mut changed = 0;
+        for i in 0..5 {
+            let offset = (0, i * 32);
+            let original = frame(10 + i * 32, lit);
+            let evened = if even {
+                composer.matched(&original, None, offset, &cancel).unwrap()
+            } else {
+                None
+            };
+            changed += usize::from(evened.is_some());
+            composer
+                .push(evened.as_ref().unwrap_or(&original), None, offset, &cancel)
+                .unwrap();
+        }
+        let canvas = composer.finish();
+        let rows: Vec<f32> = (0..canvas.height())
+            .map(|y| {
+                (0..128)
+                    .map(|x| {
+                        let art = source.get_pixel(16 + x, 10 + y)[0];
+                        let base = if lit { art / 2 + 40 } else { art };
+                        f32::from(canvas.get_pixel(x, y)[0]) - f32::from(base)
+                    })
+                    .sum::<f32>()
+                    / 128.0
+            })
+            .collect();
+        let worst = rows
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max);
+        (worst, changed)
+    };
+    let (hard, _) = step(true, false);
+    let (evened, changed) = step(true, true);
+    assert!(hard > 6.0, "fixture has no seam step: {hard}");
+    assert!(evened < 2.0, "seam step remains: {evened}");
+    assert_eq!(changed, 4);
+    assert_eq!(step(false, true), (0.0, 0));
+}
