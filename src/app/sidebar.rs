@@ -220,67 +220,89 @@ impl App {
     }
 
     pub(super) fn stitch_settings(&mut self, ui: &mut egui::Ui, discovery: bool) {
-        ui.weak("Method");
-        let stitch = &mut self.settings.stitch;
-        use crate::stitch::Method;
-        egui::ComboBox::from_id_salt("stitch_method")
-            .width(ui.available_width())
-            .truncate()
-            .selected_text(stitch.method.label())
-            .show_ui(ui, |ui| {
-                for method in Method::ALL {
-                    ui.selectable_value(&mut stitch.method, method, method.label());
+        self.stitch_settings_open(ui, discovery, false);
+    }
+
+    pub(super) fn stitch_settings_open(
+        &mut self,
+        ui: &mut egui::Ui,
+        discovery: bool,
+        advanced_open: bool,
+    ) {
+        use super::settings_ui::{Setting, row};
+        row(ui, Setting::Stitch, |ui| {
+            ui.weak("Method");
+            let stitch = &mut self.settings.stitch;
+            use crate::stitch::Method;
+            egui::ComboBox::from_id_salt("stitch_method")
+                .width(ui.available_width())
+                .truncate()
+                .selected_text(stitch.method.label())
+                .show_ui(ui, |ui| {
+                    for method in Method::ALL {
+                        ui.selectable_value(&mut stitch.method, method, method.label());
+                    }
+                });
+            let adaptive = stitch.method != Method::TwoVerticalLayers;
+            if stitch.method == Method::LayeredMotion {
+                ui.weak("For a character that pans at a different speed from the scenery behind it. Stitches both layers separately.");
+            } else if !adaptive && discovery {
+                ui.weak("Mark In/Out if the search window includes other shots.");
+            }
+            if stitch.method == Method::TwoVerticalLayers {
+                let mut custom = stitch.layer_divider_percent.is_some();
+                if ui
+                    .checkbox(&mut custom, "Set layer divider manually")
+                    .changed()
+                {
+                    stitch.layer_divider_percent = custom.then_some(50);
+                }
+                if let Some(divider) = &mut stitch.layer_divider_percent {
+                    ui.weak("Divider from left");
+                    ui.add(egui::Slider::new(divider, 20..=80).suffix("%"));
+                }
+            }
+        });
+        row(ui, Setting::StitchAdvanced, |ui| {
+            let stitch = &mut self.settings.stitch;
+            let adaptive = stitch.method != crate::stitch::Method::TwoVerticalLayers;
+            egui::CollapsingHeader::new(if super::settings_ui::in_settings(ui) {
+                "Advanced stitch options"
+            } else {
+                "Advanced"
+            })
+            .open(advanced_open.then_some(true))
+            .show(ui, |ui| {
+                ui.weak("Frame spacing");
+                ui.add(
+                    egui::Slider::new(&mut stitch.selection_travel, 0.02..=0.25)
+                        .step_by(0.01)
+                        .custom_formatter(|value, _| format!("{:.0}%", value * 100.0))
+                        .custom_parser(|text| {
+                            text.trim_end_matches('%')
+                                .trim()
+                                .parse::<f64>()
+                                .ok()
+                                .map(|n| n / 100.0)
+                        }),
+                )
+                .on_hover_text(
+                    "Minimum camera travel between selected frames as a percentage of the frame.",
+                );
+                ui.weak(if adaptive {
+                    "Analysis frames/second (adaptive)"
+                } else {
+                    "Analysis frames/second"
+                });
+                ui.add(egui::Slider::new(&mut stitch.sampling_fps, 2.0..=16.0));
+                if discovery {
+                    ui.weak("Search seconds in each direction");
+                    ui.add(egui::Slider::new(&mut stitch.search_seconds, 1.0..=30.0));
+                }
+                if adaptive {
+                    ui.checkbox(&mut stitch.allow_pauses, "Allow short pan pauses");
                 }
             });
-        let adaptive = stitch.method != Method::TwoVerticalLayers;
-        if stitch.method == Method::LayeredMotion {
-            ui.weak("For a character that pans at a different speed from the scenery behind it. Stitches both layers separately.");
-        } else if !adaptive && discovery {
-            ui.weak("Mark In/Out if the search window includes other shots.");
-        }
-        if stitch.method == Method::TwoVerticalLayers {
-            let mut custom = stitch.layer_divider_percent.is_some();
-            if ui
-                .checkbox(&mut custom, "Set layer divider manually")
-                .changed()
-            {
-                stitch.layer_divider_percent = custom.then_some(50);
-            }
-            if let Some(divider) = &mut stitch.layer_divider_percent {
-                ui.weak("Divider from left");
-                ui.add(egui::Slider::new(divider, 20..=80).suffix("%"));
-            }
-        }
-        egui::CollapsingHeader::new("Advanced").show(ui, |ui| {
-            ui.weak("Frame spacing");
-            ui.add(
-                egui::Slider::new(&mut stitch.selection_travel, 0.02..=0.25)
-                    .step_by(0.01)
-                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.0))
-                    .custom_parser(|text| {
-                        text.trim_end_matches('%')
-                            .trim()
-                            .parse::<f64>()
-                            .ok()
-                            .map(|n| n / 100.0)
-                    }),
-            )
-            .on_hover_text(
-                "Minimum camera travel between selected frames as a percentage of the frame.",
-            );
-            ui.weak(if adaptive {
-                "Analysis frames/second (adaptive)"
-            } else {
-                "Analysis frames/second"
-            });
-            ui.add(egui::Slider::new(&mut stitch.sampling_fps, 2.0..=16.0));
-            if discovery {
-                ui.weak("Search seconds in each direction");
-                ui.add(egui::Slider::new(&mut stitch.search_seconds, 1.0..=30.0));
-            }
-            if adaptive {
-                ui.checkbox(&mut stitch.allow_pauses, "Allow short pan pauses");
-            }
         });
     }
 
@@ -765,7 +787,7 @@ impl App {
                     .button("Choose…")
                     .on_hover_text("Choose output directory")
                     .clicked()
-                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                    && let Some(dir) = self.file_dialog.clone().pick_folder()
                 {
                     self.settings.out_dir = Some(dir);
                 }

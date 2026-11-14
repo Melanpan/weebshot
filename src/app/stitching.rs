@@ -725,7 +725,9 @@ impl App {
             ("PNG image", "png")
         };
         let suggested = unique_path(&dir, &base, extension);
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = self
+            .file_dialog
+            .clone()
             .set_directory(&dir)
             .set_file_name(suggested.file_name().unwrap_or_default().to_string_lossy())
             .add_filter(format, &[extension])

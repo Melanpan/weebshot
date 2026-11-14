@@ -21,41 +21,57 @@ pub(super) struct State {
 }
 impl App {
     pub(super) fn mcp_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("MCP");
-        ui.label("Optional local automation for media processing and this window.");
-        if ui
-            .checkbox(&mut self.settings.mcp_enabled, "Enable MCP integration")
-            .changed()
-        {
-            self.automation.attempted = false;
-        }
-        ui.label(
-            "Applies immediately. Disabling stops accepting requests and cancels automation jobs.",
-        );
-        if let Some(error) = &self.automation.error {
-            ui.colored_label(self.palette.error, error);
-        }
+        use super::settings_ui::{Setting, code, group, row};
+        group(ui, "Automation / MCP");
+        row(ui, Setting::Mcp, |ui| {
+            ui.label("Optional local automation for media processing and this window.");
+            if ui
+                .checkbox(&mut self.settings.mcp_enabled, "Enable MCP integration")
+                .changed()
+            {
+                self.automation.attempted = false;
+            }
+            ui.label("Applies immediately. Disabling stops accepting requests and cancels automation jobs.");
+            if let Some(error) = &self.automation.error {
+                ui.colored_label(self.palette.error, error);
+            }
+        });
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("weebshot"));
-        ui.label("GUI attachment command:");
-        ui.code(format!("{} --mcp", exe.display()));
-        ui.label("Headless command:");
-        ui.code(format!("{} --headless --mcp", exe.display()));
-        if let Ok(socket) = mcp::ipc::default_path() {
-            ui.label(format!("Local socket: {}", socket.display()));
-        }
-        if ui.button("Copy MCP client configuration").clicked() {
-            ui.ctx().copy_text(
-                serde_json::to_string_pretty(
-                    &json!({"mcpServers":{"weebshot":{"command":exe,"args":["--mcp"]}}}),
-                )
-                .unwrap(),
+        // JSON quoting works for client configuration; shell commands need platform quoting.
+        let command = super::options::shell_executable(&exe);
+        row(ui, Setting::GuiCommand, |ui| {
+            code(ui, "GUI attachment command", &format!("{command} --mcp"));
+            ui.label("Attaches clients to the running GUI through the local socket.");
+        });
+        row(ui, Setting::HeadlessCommand, |ui| {
+            code(
+                ui,
+                "Headless launch command",
+                &format!("{command} --headless --mcp"),
             );
-        }
-        ui.label("Only connect trusted local clients. They can read local media and create output files with your permissions.");
-        ui.hyperlink_to(
-            "MCP documentation",
-            "https://github.com/Melanpan/weebshot/blob/main/docs/mcp.md",
-        );
+            ui.label("Runs media processing without opening a window.");
+        });
+        row(ui, Setting::Socket, |ui| match mcp::ipc::default_path() {
+            Ok(socket) => code(ui, "Local socket path", &socket.display().to_string()),
+            Err(error) => {
+                ui.colored_label(self.palette.error, error.to_string());
+            }
+        });
+        row(ui, Setting::McpConfig, |ui| {
+            if ui.button("Copy MCP client configuration").clicked() {
+                ui.ctx().copy_text(
+                    serde_json::to_string_pretty(
+                        &json!({"mcpServers":{"weebshot":{"command":exe,"args":["--mcp"]}}}),
+                    )
+                    .unwrap(),
+                );
+            }
+            ui.label("Only connect trusted local clients. They can read local media and create output files with your permissions.");
+            ui.hyperlink_to(
+                "MCP documentation",
+                "https://github.com/Melanpan/weebshot/blob/main/docs/mcp.md",
+            );
+        });
     }
     pub(super) fn poll_automation(&mut self, ctx: &egui::Context) {
         if !self.settings.mcp_enabled {

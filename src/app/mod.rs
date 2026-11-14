@@ -6,6 +6,7 @@ mod dock;
 mod docs;
 mod menu;
 mod options;
+mod settings_ui;
 pub mod shots;
 mod sidebar;
 mod stitching;
@@ -26,7 +27,7 @@ use crate::export::{
     self, ClipFormat, ClipJob, Crop, ExportJob, JobEvent, Runner, SubMode, SubSource, Tools,
 };
 use crate::fonts::icon;
-use crate::keymap::{Action, Binding};
+use crate::keymap::Action;
 use crate::log;
 use crate::player::Player;
 use crate::settings::{Settings, SideTab, Step, StepUnit};
@@ -39,6 +40,9 @@ use crate::util::{expand_template, fmt_time, frame_at, time_tag, unique_path_avo
 use crate::waveform::Waveform;
 
 pub use shots::Script;
+
+/// Shared Wayland application identity for the main window and every child window.
+pub const APP_ID: &str = "weebshot";
 
 pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mkv", "mp4", "webm", "avi", "mov", "m2ts", "ts", "wmv", "flv", "m4v",
@@ -100,6 +104,7 @@ type HwProbe = (export::HwEncoder, Result<(), String>);
 struct UiState {
     show_options: bool,
     options_page: OptionsPage,
+    settings_ui: settings_ui::State,
     show_docs: bool,
     docs_page: usize,
     docs_cache: egui_commonmark::CommonMarkCache,
@@ -128,6 +133,8 @@ pub struct ToolStatus {
 pub struct App {
     automation: automation::State,
     player: Player,
+    /// Parent handles stay valid for the lifetime of the main window / App.
+    file_dialog: rfd::FileDialog,
     settings: Settings,
     palette: Palette,
     tools: Tools,
@@ -236,6 +243,7 @@ impl App {
 
         let mut app = Self {
             automation: Default::default(),
+            file_dialog: rfd::FileDialog::new().set_parent(cc),
             palette: settings.theme.palette(),
             player,
             settings,
@@ -260,6 +268,7 @@ impl App {
             ui: UiState {
                 show_options: false,
                 options_page: OptionsPage::General,
+                settings_ui: settings_ui::State::default(),
                 show_docs: false,
                 docs_page: 0,
                 docs_cache: Default::default(),
@@ -333,7 +342,10 @@ impl App {
     }
 
     fn open_dialog(&mut self) {
-        let mut dialog = rfd::FileDialog::new().add_filter("Video", VIDEO_EXTENSIONS);
+        let mut dialog = self
+            .file_dialog
+            .clone()
+            .add_filter("Video", VIDEO_EXTENSIONS);
         if let Some(dir) = self.player.file.as_ref().and_then(|f| f.parent()) {
             dialog = dialog.set_directory(dir);
         }
@@ -343,7 +355,10 @@ impl App {
     }
 
     fn load_subtitle_dialog(&mut self) {
-        let mut dialog = rfd::FileDialog::new().add_filter("Subtitle", SUBTITLE_EXTENSIONS);
+        let mut dialog = self
+            .file_dialog
+            .clone()
+            .add_filter("Subtitle", SUBTITLE_EXTENSIONS);
         if let Some(dir) = self.player.file.as_ref().and_then(|f| f.parent()) {
             dialog = dialog.set_directory(dir);
         }
@@ -857,7 +872,9 @@ impl App {
         if loader.cues.is_empty() {
             return self.error("No subtitle lines to save");
         }
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = self
+            .file_dialog
+            .clone()
             .set_file_name("subtitles.ass")
             .add_filter("Advanced SubStation Alpha", &["ass"])
             .save_file()
@@ -1302,27 +1319,9 @@ impl App {
             self.open(&path);
         }
 
-        // Rebinding a shortcut swallows the next key press.
-        if let Some(action) = self.ui.capturing {
-            let pressed = ctx.input(|i| {
-                i.events.iter().find_map(|e| match e {
-                    egui::Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => Some(Binding::from_event(*key, *modifiers)),
-                    _ => None,
-                })
-            });
-            if let Some(b) = pressed {
-                self.ui.capturing = None;
-                if b.key != egui::Key::Escape
-                    && let Some(other) = self.settings.keymap.set(action, Some(b))
-                {
-                    self.info(format!("{b} moved from \"{}\"", other.label()));
-                }
-            }
+        // Shortcut recording belongs to the settings viewport. Never let those keys
+        // also trigger media actions in the main viewport.
+        if self.ui.capturing.is_some() {
             return;
         }
 
@@ -1651,7 +1650,10 @@ fn native_window(
 ) -> bool {
     ctx.show_viewport_immediate(
         egui::ViewportId::from_hash_of(id),
+        // A missing app id makes Wayland compositors treat these as unrelated
+        // windows, so focus-stealing prevention can leave them behind the editor.
         egui::ViewportBuilder::default()
+            .with_app_id(APP_ID)
             .with_title(title)
             .with_icon(app_icon())
             .with_inner_size(size)

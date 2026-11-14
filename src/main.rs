@@ -99,7 +99,7 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "weebshot",
+        app::APP_ID,
         options,
         Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial_file, script)?))),
     )
