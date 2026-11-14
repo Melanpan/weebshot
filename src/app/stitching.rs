@@ -186,6 +186,12 @@ impl State {
                     );
                     return;
                 }
+                if out.forced {
+                    chip(ui, &format!("{} Forced · unverified", icon::WARNING), p.warn).on_hover_text(
+                        "The frames did not pass the alignment checks. They are placed by their best-guess shift only; save as PSD to fix the layers by hand.",
+                    );
+                    return;
+                }
                 let color=if out.confidence>=0.9 {p.ok}else{p.warn};
                 chip(ui,&format!("{} {:.0}% confidence",icon::CHECK,out.confidence*100.0),color)
                     .on_hover_text("Confidence measures alignment agreement. Inspect the image for local animation and overlap seams before saving.");
@@ -225,8 +231,9 @@ impl State {
             );
         });
         ui.add_space(6.0);
-        if out.omitted_frames > 0 || out.search_limited || out.range_trimmed {
+        if out.forced || out.omitted_frames > 0 || out.search_limited || out.range_trimmed {
             let title = match (out.omitted_frames, out.search_limited) {
+                _ if out.forced => "Forced result · Alignment not verified".to_string(),
                 (0, false) => "Marked range shortened · Coherent pan retained".to_string(),
                 (0, true) => "Search limit reached · Pan may continue".to_string(),
                 (n, true) => format!(

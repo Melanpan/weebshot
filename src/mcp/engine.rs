@@ -937,6 +937,9 @@ impl Engine {
         if let Some(divider) = a["layer_divider_percent"].as_u64() {
             options.layer_divider_percent = Some(divider as u32);
         }
+        if let Some(force) = a["force"].as_bool() {
+            options.force = force;
+        }
         if let Some(prefer) = a["prefer_background"].as_bool() {
             options.prefer_background = prefer;
         }

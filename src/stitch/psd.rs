@@ -12,11 +12,20 @@ use image::{GrayImage, RgbImage, RgbaImage};
 use std::sync::atomic::AtomicBool;
 
 // ag-psd encodes from in-memory RGBA layers/masks and retains encoded data.
-// Bound both source layer storage and the merged preview before allocating.
+// Measured peak memory is about 33 bytes per layer pixel (1.1 GB for ten
+// rotated 1080p frames, 1.4 GB for twenty unrotated ones), so this allows
+// about thirty 1080p frames at roughly 2 GB. Bound both source layer storage
+// and the merged preview before allocating.
+const LAYER_PIXELS: u64 = 64_000_000;
+
 pub(super) fn check_budget(layer_pixels: u64, canvas_pixels: u64) -> Result<()> {
-    if layer_pixels > 28_000_000 || 8 * layer_pixels + 5 * canvas_pixels > 300_000_000 {
+    if layer_pixels > LAYER_PIXELS
+        || 8 * layer_pixels + 5 * canvas_pixels > 8 * LAYER_PIXELS + 160_000_000
+    {
         bail!(
-            "The selected layers are too large for PSD export. Include fewer frames or use a shorter range."
+            "The selected layers are too large for PSD export ({} megapixels of layers; the limit is {}). Untick some frames or use a shorter range.",
+            layer_pixels / 1_000_000,
+            LAYER_PIXELS / 1_000_000
         );
     }
     Ok(())

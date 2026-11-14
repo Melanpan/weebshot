@@ -51,7 +51,7 @@ settings! {
     Decode, Playback, "Decoding", "Hardware decoding", "Use GPU acceleration to decode video. Disable if frames glitch.", "performance graphics";
     Ffmpeg, Export, "External tools", "FFmpeg executable", "Detected version, path and executable selection.", "binary tools browse auto-detect";
     Gifsicle, Export, "External tools", "Gifsicle executable", "Optional tool for smaller GIFs.", "binary tools browse auto-detect path";
-    Stitch, Export, "Auto Stitch", "Stitch method", "Combine clean source frames into a panorama.", "stitching frames automatic translation layers motion divider foreground background";
+    Stitch, Export, "Auto Stitch", "Stitch method", "Combine clean source frames into a panorama. Force a result builds a rough stitch when alignment fails.", "stitching frames automatic translation layers motion divider foreground background force low confidence unverified rough";
     StitchAdvanced, Export, "Auto Stitch", "Advanced stitch options", "Frame spacing, analysis frames per second, search window and pan pauses.", "sampling fps travel panorama stitching seconds";
     H264, Export, "Video encoding", "H.264 preset", "Slower presets give smaller MP4/MKV files at the same quality.", "x264 encoder compression speed";
     Vp9, Export, "Video encoding", "VP9 speed", "WebM encoding: 0 is best quality, 5 is fastest.", "encoder compression performance";

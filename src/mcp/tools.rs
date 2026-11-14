@@ -149,7 +149,7 @@ fn specs() -> Vec<(&'static str, &'static str, Value, Vec<&'static str>)> {
         (
             "stitch_create",
             "Queue the existing camera-pan Stitch engine, with markers or automatic boundaries. Saves PNG or editable layered PSD; no grid/collage layouts are implemented.",
-            json!({"output":string,"base_directory":string,"in_seconds":number,"out_seconds":number,"method":{"enum":["automatic","translation","two_vertical_layers","shift_and_scale","layered_motion"]},"sampling_fps":{"type":"number","minimum":1,"maximum":30},"search_seconds":{"type":"number","minimum":0.1,"maximum":60},"layer_divider_percent":{"type":"integer","minimum":10,"maximum":90},"prefer_background":boolean}),
+            json!({"output":string,"base_directory":string,"in_seconds":number,"out_seconds":number,"method":{"enum":["automatic","translation","two_vertical_layers","shift_and_scale","layered_motion"]},"sampling_fps":{"type":"number","minimum":1,"maximum":30},"search_seconds":{"type":"number","minimum":0.1,"maximum":60},"layer_divider_percent":{"type":"integer","minimum":10,"maximum":90},"prefer_background":boolean,"force":boolean}),
             vec!["output"],
         ),
         (

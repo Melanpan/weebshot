@@ -2,7 +2,22 @@
 
 ## Unreleased
 
+### New
+
+- **Force a result** (Stitch tab and Options → Export → Auto Stitch, off by default). When
+  Auto Stitch cannot align the frames reliably, it builds a rough stitch from each frame's
+  best-guess shift instead of failing. The preview is marked **Forced · unverified**; save it
+  as PSD to move and mask the frames by hand. MCP: `force` on `stitch_create`.
+
 ### Fixed
+
+- **Auto Stitch right after opening a clip** no longer reports "No camera movement detected"
+  when the camera is already moving on the first frame. Discovery now starts from the moving
+  frames it found near the playhead.
+- **Auto Stitch depends less on where the playhead is.** If the movement nearest the playhead
+  is not a stitchable pan, Automatic tries the other pans in its search window, nearest first.
+- **Save PSD…** accepts about thirty full-HD frames (64 megapixels of layers), up from about
+  thirteen. A ten-frame rotated stitch was already too large for the old limit.
 
 - **Dragging the playhead inside an In/Out selection** now scrubs. Before, grabbing it in the
   ruler moved the whole selection.

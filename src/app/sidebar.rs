@@ -262,6 +262,8 @@ impl App {
                     ui.add(egui::Slider::new(divider, 20..=80).suffix("%"));
                 }
             }
+            ui.checkbox(&mut stitch.force, "Force a result")
+                .on_hover_text("When the frames cannot be aligned reliably, build a rough stitch anyway instead of failing. Frames are placed by their best-guess shift without any checks, so expect seams. Save it as a PSD to move and mask the frames by hand.");
         });
         row(ui, Setting::StitchAdvanced, |ui| {
             let stitch = &mut self.settings.stitch;

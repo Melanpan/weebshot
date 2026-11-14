@@ -50,8 +50,9 @@ method exports each side of a frame on its own layer. Layer names show source
 timestamps. Open the PSD, select a mask thumbnail, and paint white to reveal
 more of that frame or black to hide part of it. The PSD also includes a merged
 image that matches the PNG. Apply any frame selection edits before saving.
-If the PSD exceeds the export memory budget, include fewer frames or shorten
-the range.
+PSD export holds every layer in memory and is limited to 64 megapixels of
+layers, about thirty full-HD frames (rotated frames take more). Beyond that,
+untick some frames or shorten the range.
 
 **Retry** repeats the last stitch using the latest stitch settings. If the same
 video is still open and both In/Out marks are set, it uses those current marks.
@@ -102,6 +103,7 @@ available in **Options → Export → Auto Stitch**.
 | Analysis rate | 8 frames/second, adaptive except for Two vertical layers |
 | Search in each direction | 15 seconds (6 seconds first, widened when the pan reaches that limit) |
 | Allow short pauses | Enabled (up to 0.75 seconds) |
+| Force a result | Off |
 
 **Automatic** tries single translation first. If ordinary alignment fails, it can
 fall back to two vertical layers, then to shift, scale and rotation. **Single translation** uses one shift per
@@ -163,6 +165,14 @@ search limit is reached, a warning explains that the pan may continue. Use a man
 marked range when discovery misses the desired section. If a marked range contains
 a cut, a hold or frames that cannot be matched, Weebshot stitches its longest
 coherent pan and the preview shows **Marked range shortened** with the covered times.
+
+**Force a result** (off by default) changes what happens when every check above
+refuses. Instead of an error, Weebshot places the frames of the shot under the
+playhead (or the shot that moves most inside a marked range) by each pair's
+best-guess shift, without verifying that the artwork agrees. It never joins two
+shots across a cut. The preview is marked **Forced · unverified**; expect seams and
+doubled artwork, and save as PSD to move and mask the frames by hand. A stitch
+that passes the normal checks is unaffected by this setting.
 
 Limits: a selection of 60 seconds, 1,000 analysis samples, 96 selected source frames,
 16 megapixels per source frame, and a 32 megapixel output with at most 16,384 pixels

@@ -1,6 +1,7 @@
 //! Local camera-pan reconstruction, independent of egui and libmpv.
 mod compose;
 mod decode;
+mod forced;
 mod layers;
 mod motion;
 mod planes;
@@ -32,6 +33,8 @@ const MAX_EDGE: u32 = 16384;
 /// Edge agreement at which the oldest overlapping reference is accepted
 /// without comparing newer ones.
 const STRONG_EDGE_AGREEMENT: f32 = 0.7;
+/// Further pans Automatic tries after the one nearest the playhead fails.
+const MAX_ALTERNATIVES: usize = 3;
 /// Seconds searched on each side of the playhead before widening.
 const INITIAL_SEARCH: f64 = 6.0;
 
@@ -78,6 +81,9 @@ pub struct Options {
     pub search_seconds: f64,
     pub allow_pauses: bool,
     pub selection_travel: f32,
+    /// When every checked method refuses, build an unverified translation-only
+    /// stitch for manual repair instead of failing.
+    pub force: bool,
     // Advanced matching thresholds.
     pub pause_seconds: f64,
     pub min_travel: f32,
@@ -129,6 +135,7 @@ impl Default for Options {
             pause_seconds: 0.75,
             min_travel: 0.025,
             selection_travel: 0.08,
+            force: false,
             thresholds: Default::default(),
             native_thresholds: motion::Thresholds {
                 max_error: 8.0,
@@ -206,6 +213,8 @@ pub struct Recipe {
     trimmed: bool,
     split: Option<u32>,
     method: Method,
+    /// Built by the unchecked fallback; alignment was not verified.
+    forced: bool,
 }
 
 pub struct Output {
@@ -221,6 +230,8 @@ pub struct Output {
     pub omitted_frames: usize,
     pub search_limited: bool,
     pub range_trimmed: bool,
+    /// The checked methods refused and "Force a result" built this anyway.
+    pub forced: bool,
     pub range: (f64, f64),
     pub elapsed: f32,
     pub recipe: Arc<Recipe>,
@@ -268,8 +279,13 @@ fn region(
     let mut nearby: Vec<_> =
         (seed.saturating_sub(radius)..(seed + radius + 1).min(motions.len())).collect();
     nearby.sort_by_key(|&i| i.abs_diff(seed));
-    let reference=nearby.into_iter().filter_map(|i|motions[i])
-        .find(|m|m.reliable(&options.thresholds) && m.moving())
+    // Walk outward from the nearest moving pair, not from the playhead itself:
+    // a playhead on a hold or an unmatched pair (the first frame of a clip,
+    // the frame after a cut) would otherwise end the walk before it starts.
+    let (anchor, reference) = nearby
+        .into_iter()
+        .filter_map(|i| Some((i, motions[i]?)))
+        .find(|(_, m)| m.reliable(&options.thresholds) && m.moving())
         .context("No coherent camera pan near the playhead. Try marking In and Out, then Stitch Selection.")?;
     let compatible = |m: motion::Motion| {
         let dot = m.dx * reference.dx + m.dy * reference.dy;
@@ -277,8 +293,8 @@ fn region(
         !m.moving() || (dot > 0 && cross as f32 <= dot as f32 * options.direction_tolerance + 1.0)
     };
     let walk = |back: bool| {
-        let mut frame = seed;
-        let mut last = seed;
+        let mut frame = anchor;
+        let mut last = anchor;
         let mut pauses = 0;
         loop {
             let pair = if back {
@@ -312,6 +328,45 @@ fn region(
         last
     };
     Ok((walk(true), walk(false)))
+}
+
+/// Every coherent pan in the window that travels far enough to stitch, nearest
+/// the seed first.
+fn other_regions(
+    motions: &[Option<motion::Motion>],
+    seed: usize,
+    options: &Options,
+    fps: f64,
+    size: (u32, u32),
+) -> Vec<(usize, usize)> {
+    let mut regions: Vec<(usize, usize)> = Vec::new();
+    for (i, m) in motions.iter().enumerate() {
+        if regions.last().is_some_and(|&(_, hi)| i < hi)
+            || !m.is_some_and(|m| m.reliable(&options.thresholds) && m.moving())
+        {
+            continue;
+        }
+        let Ok((lo, hi)) = region(motions, i, options, fps) else {
+            continue;
+        };
+        let (dx, dy) = motions[lo..hi]
+            .iter()
+            .flatten()
+            .fold((0, 0), |(x, y), m| (x + m.dx, y + m.dy));
+        if (dx.abs() as f32 / size.0 as f32).max(dy.abs() as f32 / size.1 as f32)
+            >= options.min_travel
+        {
+            regions.push((lo, hi));
+        }
+    }
+    regions.sort_by_key(|&(lo, hi)| {
+        if seed < lo {
+            lo - seed
+        } else {
+            seed.saturating_sub(hi)
+        }
+    });
+    regions
 }
 
 fn positions(
@@ -461,6 +516,92 @@ pub fn run(
     report: impl Fn(f32, &'static str),
 ) -> Result<Output> {
     let started = Instant::now();
+    // Automatic first follows the motion nearest the playhead. When that is
+    // not a stitchable pan (a small movement before the real one, a pan that
+    // starts a second later), try the other pans in the window, nearest first.
+    let tried = std::cell::Cell::new(None);
+    let mut skip: Vec<(f64, f64)> = Vec::new();
+    let mut first_error = None;
+    for attempt in 0..=MAX_ALTERNATIVES {
+        tried.set(None);
+        let alternatives = (attempt > 0).then_some(skip.as_slice());
+        match solve(ffmpeg, id, job, alternatives, &tried, cancel, &report) {
+            Ok(mut output) => {
+                output.elapsed = started.elapsed().as_secs_f32();
+                return Ok(output);
+            }
+            Err(error) if cancel.load(Ordering::Relaxed) => return Err(error),
+            Err(error) => {
+                crate::log::log(
+                    crate::log::Level::Debug,
+                    "stitch",
+                    format!("attempt {attempt} on {:?}: {error:#}", tried.get()),
+                );
+                first_error.get_or_insert(error);
+            }
+        }
+        // A marked range has no alternatives, and an attempt that found no
+        // further pan ends the search.
+        match tried.get() {
+            Some(span) if job.range.is_none() => skip.push(span),
+            _ if attempt > 0 || job.range.is_some() => break,
+            _ => {}
+        }
+    }
+    let error = first_error.unwrap();
+    if !job.options.force {
+        return Err(error);
+    }
+    crate::log::log(
+        crate::log::Level::Info,
+        "stitch",
+        format!("forcing a result after: {error:#}"),
+    );
+    // A forced attempt that also fails reports why the checked one refused.
+    let forced =
+        forced::recipe(ffmpeg, job, &job.options.current(), cancel, &report).and_then(|recipe| {
+            let included = vec![true; recipe.frames.len()];
+            recompose(
+                ffmpeg,
+                id,
+                Arc::new(recipe),
+                included,
+                cancel,
+                |fraction, stage| report(0.7 + 0.3 * fraction, stage),
+            )
+        });
+    match forced {
+        Ok(mut output) => {
+            output.elapsed = started.elapsed().as_secs_f32();
+            Ok(output)
+        }
+        Err(second) if cancel.load(Ordering::Relaxed) => Err(second),
+        Err(second) => {
+            crate::log::log(
+                crate::log::Level::Debug,
+                "stitch",
+                format!("forced stitch failed: {second:#}"),
+            );
+            Err(anyhow::anyhow!(
+                "{error:#} Force a result could not help either: {second}."
+            ))
+        }
+    }
+}
+
+/// One attempt. `skip` is `None` for the pan nearest the playhead; otherwise
+/// it lists the time spans already attempted and the nearest remaining pan is
+/// used. `tried` receives the span this attempt settled on.
+fn solve(
+    ffmpeg: &std::path::Path,
+    id: u64,
+    job: &Job,
+    skip: Option<&[(f64, f64)]>,
+    tried: &std::cell::Cell<Option<(f64, f64)>>,
+    cancel: &AtomicBool,
+    report: &impl Fn(f32, &'static str),
+) -> Result<Output> {
+    let started = Instant::now();
     check_cancel(cancel)?;
     if !job.duration.is_finite() || job.duration <= 0.0 || !job.playhead.is_finite() {
         bail!("Video duration is unavailable");
@@ -561,6 +702,16 @@ pub fn run(
         let seed = (((job.playhead - start) * fps).round() as usize).min(frames.len() - 1);
         let candidate = if job.range.is_some() {
             Ok((0, frames.len() - 1))
+        } else if let Some(skip) = skip {
+            let span =
+                |(lo, hi): (usize, usize)| (start + lo as f64 / fps, start + hi as f64 / fps);
+            other_regions(&discovery, seed, options, fps, size)
+                .into_iter()
+                .find(|&r| {
+                    let (a, b) = span(r);
+                    !skip.iter().any(|&(lo, hi)| a < hi && lo < b)
+                })
+                .context("No coherent camera pan near the playhead. Try marking In and Out, then Stitch Selection.")
         } else {
             region(&discovery, seed, options, fps)
         };
@@ -596,6 +747,12 @@ pub fn run(
             }
             other => other,
         };
+        if let Ok((lo, hi)) = candidate
+            && job.range.is_none()
+            && hi > lo
+        {
+            tried.set(Some((start + lo as f64 / fps, start + hi as f64 / fps)));
+        }
         break (frames, motions, Some(candidate));
     };
     let analysed = frames.len();
@@ -613,6 +770,7 @@ pub fn run(
         trimmed: false,
         split: None,
         method: Method::Translation,
+        forced: false,
     };
     let compose_recipe = |recipe: Recipe| -> Result<Output> {
         let recipe = Arc::new(recipe);
@@ -931,6 +1089,7 @@ pub fn run(
         trimmed: job.range.is_some() && (lo > 0 || hi + 1 < analysed),
         split: None,
         method: Method::Translation,
+        forced: false,
     });
     let included = vec![true; recipe.frames.len()];
     let mut out = recompose(ffmpeg, id, recipe, included, cancel, |fraction, stage| {
@@ -1189,7 +1348,12 @@ pub fn recompose(
     let omitted = recipe.omitted;
     let excluded = recipe.frames.len() - selected.len();
     let warning = format!(
-        "{}{}{}{}",
+        "{}{}{}{}{}",
+        if recipe.forced {
+            "Forced result: these frames did not pass the alignment checks, so they are placed by their best-guess shift only. Expect seams and doubled artwork; save as PSD to move and mask the frames by hand. "
+        } else {
+            ""
+        },
         if omitted > 0 {
             format!(
                 "Omitted {omitted} selected {} with incompatible animation; output covers {:.2}–{:.2}s. ",
@@ -1244,6 +1408,7 @@ pub fn recompose(
         omitted_frames: omitted,
         search_limited: truncated,
         range_trimmed: trimmed,
+        forced: recipe.forced,
         range: output_range,
         elapsed: started.elapsed().as_secs_f32(),
         recipe,

@@ -58,7 +58,13 @@ at `pA + (dx, dy)`. Positive x points right and positive y points down, so a neg
 indicates the camera moved up while the artwork moved down on screen.
 
 Automatic discovery seeds a moving pair near the playhead, then extends in both directions
-while motion remains consistent. Brief holds are allowed by default. A longer baseline of
+from that pair while motion remains consistent. The walk starts at the pair, not at the
+playhead frame: a playhead resting on a hold or on a pair that does not match (the first
+frame of a clip whose camera is already rolling) would otherwise end it immediately.
+If that region does not produce a stitch, up to three further regions in the window are
+attempted, nearest the playhead first. Only regions whose analysis travel reaches the
+minimum are considered, and each attempt passes the same checks. The error reported
+when all fail is the first one. Brief holds are allowed by default. A longer baseline of
 roughly half a second can detect slow motion when adjacent downscaled samples round to zero.
 Low detail, poor agreement and inconsistent direction can end the automatic region.
 Scene cuts are handled through these match signals. A marked range skips boundary discovery.
@@ -260,8 +266,22 @@ showing which of its pixels appear in the stitch. With Two vertical layers,
 each frame contributes two independently positioned bitmap layers. The full
 canvas is also stored as the document's merged image. The [ag-psd writer](https://docs.rs/ag-psd)
 serializes the document. Because it needs in-memory image and mask data, the job
-checks the total layer and canvas sizes first. Export runs on the shared worker
+checks the total layer and canvas sizes first. Peak memory measures about 33 bytes per
+layer pixel, and the budget is 64 megapixels of layers (about thirty 1080p frames;
+rotated frames count their bounding box). Export runs on the shared worker
 and writes through the image export staging path.
+
+## Forced results
+
+With **Force a result** enabled, a job whose checked attempts all fail is handed to
+the [unchecked fallback](../../src/stitch/forced.rs). It samples at twice the analysis
+rate, takes each pair's best translation regardless of error or support, and splits the
+window into shots at pairs that differ like a scene cut. It keeps the shot under the
+playhead, or the shot with the most movement inside a marked range, selects frames by
+travel and refines each against the previous selected frame at source resolution,
+again without thresholds. The recipe is marked forced, which the preview and the
+warning text report. Frame selection, PNG and PSD export work as for any translation
+stitch.
 
 ## Performance and debugging
 

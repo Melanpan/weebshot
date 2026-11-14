@@ -189,6 +189,16 @@ fn boundaries_allow_short_pause_but_stop_at_cut_and_reversal() {
         region(&motions, 3, &Options::default(), 8.0).unwrap(),
         (1, 7)
     );
+    // A playhead on an unmatched pair (the first frame of a clip whose camera
+    // already rolls) still finds the pan that starts next to it.
+    let unmatched_start = vec![None, moving(0, 4), moving(0, 4), moving(0, 4), None];
+    for seed in 0..=4 {
+        assert_eq!(
+            region(&unmatched_start, seed, &Options::default(), 8.0).unwrap(),
+            (1, 4),
+            "seed {seed}"
+        );
+    }
     let reversed = vec![moving(3, 0), moving(3, 0), moving(-3, 0)];
     assert_eq!(
         region(&reversed, 1, &Options::default(), 8.0).unwrap(),
@@ -1674,14 +1684,18 @@ fn reported_rolling_pan() {
         std::env::var_os("WEEBSHOT_ROLLING_PAN_SAMPLE").expect("set WEEBSHOT_ROLLING_PAN_SAMPLE"),
     );
     let ffmpeg = crate::export::find_tool("ffmpeg");
-    for (id, method, range) in [
-        (910060, Method::Automatic, Some((0.0, 3.379))),
-        (910061, Method::Automatic, None),
-        (910062, Method::ShiftAndScale, None),
+    // The playhead rests at 0 right after the clip is opened, on a pair the
+    // translation matcher rejects because the roll has already begun.
+    for (id, method, range, playhead) in [
+        (910060, Method::Automatic, Some((0.0, 3.379)), 1.0),
+        (910061, Method::Automatic, None, 1.0),
+        (910062, Method::ShiftAndScale, None, 1.0),
+        (910063, Method::Automatic, None, 0.0),
+        (910064, Method::Automatic, None, 3.379),
     ] {
         let job = Job {
             input: input.clone(),
-            playhead: 1.0,
+            playhead,
             duration: 3.379,
             range,
             source_fps: 24000.0 / 1001.0,
@@ -1778,10 +1792,19 @@ fn local_footage_benchmark() {
         {
             continue;
         }
+        // `WEEBSHOT_BENCH_PLAYHEAD=0` puts the playhead at the window start,
+        // where it rests after opening a clip; 0.5 (the default) is the midpoint.
+        let at: f64 = std::env::var("WEEBSHOT_BENCH_PLAYHEAD")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.5);
         for (k, range) in [Some((lo, hi)), None].into_iter().enumerate() {
+            if range.is_some() && std::env::var_os("WEEBSHOT_BENCH_AUTO_ONLY").is_some() {
+                continue;
+            }
             let job = Job {
                 input: input.clone(),
-                playhead: (lo + hi) / 2.0,
+                playhead: lo + (hi - lo) * at,
                 duration,
                 range,
                 source_fps: fps,
@@ -1792,6 +1815,7 @@ fn local_footage_benchmark() {
                         Ok("translation") => Method::Translation,
                         _ => Method::Automatic,
                     },
+                    force: std::env::var_os("WEEBSHOT_BENCH_FORCE").is_some(),
                     ..Default::default()
                 },
             };
@@ -1805,8 +1829,9 @@ fn local_footage_benchmark() {
             ) {
                 Ok(out) => {
                     eprintln!(
-                        "BENCH {n} {name} {}: OK {:?} {:?} frames {} range {:.2}-{:.2} conf {:.2} omitted {} {:.1}s",
+                        "BENCH {n} {name} {}: OK{} {:?} {:?} frames {} range {:.2}-{:.2} conf {:.2} omitted {} {:.1}s",
                         if range.is_some() { "range" } else { "auto " },
+                        if out.forced { " FORCED" } else { "" },
                         out.method,
                         out.dimensions,
                         out.frames,
@@ -2085,5 +2110,111 @@ fn layered_planes_video_round_trip() {
             .to_string()
             .contains("two independently moving layers"),
         "{error}"
+    );
+}
+
+/// Every frame carries a different large overlay, so no pair passes the
+/// alignment checks. The stitch is refused unless forced; a forced result is
+/// marked as such and still follows the pan, and it never joins the next shot.
+#[test]
+fn forced_result_when_alignment_is_refused() {
+    let ffmpeg = crate::export::find_tool("ffmpeg");
+    if std::process::Command::new(&ffmpeg)
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        eprintln!("FFmpeg unavailable; video fixture test skipped");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("weebshot-forced-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let source = artwork(384, 640);
+    let (w, h) = crop(&source, 0, 0).dimensions();
+    for i in 0..24u32 {
+        let mut frame = crop(&source, 20, 10 + i * 6);
+        // A "character" filling the middle of the frame that changes every frame.
+        for y in h / 5..h * 4 / 5 {
+            for x in w / 5..w * 4 / 5 {
+                let v = ((x * (7 + i) + y * (13 + 3 * i) + i * 97) % 256) as u8;
+                frame.put_pixel(x, y, Rgb([v, 255 - v, (v / 2).wrapping_add(i as u8 * 9)]));
+            }
+        }
+        frame.save(dir.join(format!("{i:03}.png"))).unwrap();
+    }
+    // A second, unrelated shot after the pan.
+    for i in 24..32u32 {
+        let mut frame = crop(&source, 20, 10);
+        for (x, y, p) in frame.enumerate_pixels_mut() {
+            *p = Rgb([((x * 131 + y * 73 + i) % 256) as u8, 0, 255]);
+        }
+        frame.save(dir.join(format!("{i:03}.png"))).unwrap();
+    }
+    let video = dir.join("pan.mkv");
+    let status = std::process::Command::new(&ffmpeg)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-framerate",
+            "8",
+            "-i",
+        ])
+        .arg(dir.join("%03d.png"))
+        .args(["-c:v", "ffv1"])
+        .arg(&video)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let job = |force| Job {
+        input: video.clone(),
+        playhead: 0.0,
+        duration: 4.0,
+        range: None,
+        source_fps: 8.0,
+        options: Options {
+            force,
+            ..Default::default()
+        },
+    };
+    let cancel = AtomicBool::new(false);
+    assert!(run(&ffmpeg, 910070, &job(false), &cancel, |_, _| {}).is_err());
+    let out = run(&ffmpeg, 910071, &job(true), &cancel, |_, _| {}).unwrap();
+    assert!(out.forced);
+    assert!(out.warning.starts_with("Forced result"));
+    assert_eq!(out.method, Method::Translation);
+    assert_eq!(out.dimensions.0, w);
+    // 23 steps of 6 px were panned; most of that must be recovered.
+    assert!(
+        out.dimensions.1 > h + 100 && out.dimensions.1 <= h + 138,
+        "{:?}",
+        out.dimensions
+    );
+    assert!(out.range.1 < 3.0, "joined the next shot: {:?}", out.range);
+}
+
+#[test]
+fn other_regions_are_ordered_by_distance_and_need_travel() {
+    // A one-pixel twitch, a real pan, a cut, then a second pan.
+    let mut motions = vec![moving(0, 1), moving(0, 0), None];
+    motions.extend(std::iter::repeat_n(moving(0, 6), 4));
+    motions.push(None);
+    motions.extend(std::iter::repeat_n(moving(8, 0), 4));
+    let options = Options::default();
+    assert_eq!(
+        other_regions(&motions, 0, &options, 8.0, (320, 180)),
+        vec![(3, 7), (8, 12)]
+    );
+    assert_eq!(
+        other_regions(&motions, 12, &options, 8.0, (320, 180)),
+        vec![(8, 12), (3, 7)]
     );
 }
