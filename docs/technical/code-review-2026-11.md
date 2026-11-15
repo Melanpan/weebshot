@@ -116,10 +116,6 @@ be reused.
   ([`src/thumbs.rs:256`](../../src/thumbs.rs)) returns early when the view is wider than
   `MAX_DETAIL_SPAN` but leaves an earlier `want` in place, so a detail decode still starts
   150 ms later for a range that is no longer shown. Clear `want` on that path.
-- **Preview subtitle file is never deleted.** `sync_preview_subs`
-  ([`src/app/mod.rs:504`](../../src/app/mod.rs)) writes
-  `weebshot-<pid>-preview.subs.ass` to the temp directory and leaves it there on exit. The
-  name is also predictable and `File::create` follows symlinks.
 - **Output-exists check happens after the encode.** `run_job`
   ([`src/export/mod.rs:720`](../../src/export/mod.rs)) only refuses an existing output once
   the whole encode has finished. The GUI picks a free name up front, so this mainly

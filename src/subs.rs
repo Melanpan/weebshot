@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -12,7 +12,7 @@ use std::thread;
 use crossbeam_channel::{Receiver, bounded};
 use eframe::egui;
 
-use crate::export::hide_console;
+use crate::export::{Scratch, hide_console};
 use crate::log;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +32,51 @@ pub struct Cue {
     /// Original raw ASS `Text` field (override tags, `\N`, verbatim) — replaced with
     /// `text` once the line is edited, which loses those for that line only.
     raw_text: String,
+}
+
+/// Owned preview file: the private directory is created exclusively, and rewrites
+/// use the original handle rather than following a path in the shared temp directory.
+/// Fields drop in declaration order, closing the file before removing its directory
+/// (required on Windows).
+pub struct PreviewSubs {
+    file: File,
+    path: PathBuf,
+    _scratch: Scratch,
+}
+
+impl PreviewSubs {
+    pub fn new() -> anyhow::Result<Self> {
+        Self::new_in(&std::env::temp_dir())
+    }
+
+    fn new_in(parent: &Path) -> anyhow::Result<Self> {
+        let scratch = Scratch::new(parent, 0)?;
+        let path = scratch.path.join("preview.ass");
+        let mut options = File::options();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(&path)?;
+        Ok(Self {
+            file,
+            path,
+            _scratch: scratch,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn write(&mut self, cues: &CueLoader) -> io::Result<()> {
+        self.file.rewind()?;
+        self.file.set_len(0)?;
+        cues.write_ass(&mut self.file)?;
+        self.file.flush()
+    }
 }
 
 /// Where to read the cues from.
@@ -367,6 +412,68 @@ mod tests {
         "Dialogue: 0,0:00:01.00,0:00:02.00,Sign,,0,0,0,,{\\pos(1,2)}\n",
         "Comment: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Keep this comment\n",
     );
+
+    #[test]
+    fn preview_rewrites_and_cleans_up_its_private_directory() {
+        let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let mut preview = PreviewSubs::new_in(&root.path).unwrap();
+        let path = preview.path().to_path_buf();
+        let directory = path.parent().unwrap().to_path_buf();
+        let mut cues = loader(ASS);
+        preview.write(&cues).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ASS);
+        // Rewriting a shorter document must not leave stale bytes at the end.
+        while !cues.cues.is_empty() {
+            cues.delete(0);
+        }
+        preview.write(&cues).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), output(&cues));
+        assert_eq!(preview.path(), path);
+        drop(preview);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn previews_are_isolated_and_private() {
+        let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let mut first = PreviewSubs::new_in(&root.path).unwrap();
+        let mut second = PreviewSubs::new_in(&root.path).unwrap();
+        assert_ne!(first.path().parent(), second.path().parent());
+        let first_cues = loader(ASS);
+        let mut second_cues = loader(ASS);
+        second_cues.set_text(0, "Separate preview".into());
+        first.write(&first_cues).unwrap();
+        second.write(&second_cues).unwrap();
+        assert_eq!(std::fs::read_to_string(first.path()).unwrap(), ASS);
+        assert_eq!(
+            std::fs::read_to_string(second.path()).unwrap(),
+            output(&second_cues)
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = std::fs::metadata(first.path().parent().unwrap()).unwrap();
+            assert_eq!(directory.permissions().mode() & 0o777, 0o700);
+            let file = std::fs::metadata(first.path()).unwrap();
+            assert_eq!(file.permissions().mode() & 0o777, 0o600);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_does_not_follow_a_legacy_filename_symlink() {
+        let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let victim = root.path.join("untouched.txt");
+        std::fs::write(&victim, "keep this file").unwrap();
+        let legacy = root
+            .path
+            .join(format!("weebshot-{}-preview.subs.ass", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &legacy).unwrap();
+        let mut preview = PreviewSubs::new_in(&root.path).unwrap();
+        preview.write(&loader(ASS)).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep this file");
+        assert_eq!(std::fs::read_to_string(preview.path()).unwrap(), ASS);
+    }
 
     #[test]
     fn parses_visible_dialogue_without_losing_source() {

@@ -32,7 +32,7 @@ use crate::log;
 use crate::player::Player;
 use crate::settings::{Settings, SideTab, Step, StepUnit};
 use crate::sounds::{Sound, Sounds};
-use crate::subs::{CueLoader, CueSource};
+use crate::subs::{CueLoader, CueSource, PreviewSubs};
 use crate::theme::Palette;
 use crate::thumbs::Thumbs;
 use crate::tracks::{TrackKind, relative_sub_index};
@@ -147,6 +147,7 @@ pub struct App {
     looping: bool,
     timeline: timeline::TimelineState,
     cues: Option<CueLoader>,
+    preview_subs: Option<PreviewSubs>,
     thumbs: Option<Thumbs>,
     waveform: Option<Waveform>,
     shuttle_ui: widgets::ShuttleState,
@@ -257,6 +258,7 @@ impl App {
             looping: false,
             timeline: timeline::TimelineState::default(),
             cues: None,
+            preview_subs: None,
             thumbs: None,
             waveform: None,
             shuttle_ui: Default::default(),
@@ -332,6 +334,7 @@ impl App {
                 self.out_point = None;
                 self.set_looping(false);
                 self.cues = None;
+                self.preview_subs = None;
                 self.thumbs = None;
                 self.waveform = None;
                 self.timeline = timeline::TimelineState::default();
@@ -380,6 +383,7 @@ impl App {
         self.out_point = None;
         self.set_looping(false);
         self.cues = None;
+        self.preview_subs = None;
         // Background decoders and caches belong to the closed file; drop them now
         // instead of keeping their textures and ffmpeg processes around until the
         // next file is opened.
@@ -502,13 +506,26 @@ impl App {
     fn sync_preview_subs(&mut self) {
         match &self.cues {
             Some(loader) if loader.dirty => {
-                let path = std::env::temp_dir()
-                    .join(format!("weebshot-{}-preview.subs.ass", std::process::id()));
-                if loader.write_to(&path).is_ok() {
-                    self.player.show_edited_subs(&path);
+                if self.preview_subs.is_none() {
+                    match PreviewSubs::new() {
+                        Ok(preview) => self.preview_subs = Some(preview),
+                        Err(e) => {
+                            self.error(format!("Could not create subtitle preview: {e:#}"));
+                            return;
+                        }
+                    }
+                }
+                if let Some(preview) = &mut self.preview_subs {
+                    match preview.write(loader) {
+                        Ok(()) => self.player.show_edited_subs(preview.path()),
+                        Err(e) => self.error(format!("Could not write subtitle preview: {e}")),
+                    }
                 }
             }
-            _ => self.player.hide_edited_subs(),
+            _ => {
+                self.player.hide_edited_subs();
+                self.preview_subs = None;
+            }
         }
     }
 
@@ -1625,6 +1642,8 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
         self.finish_stitch();
+        self.player.hide_edited_subs();
+        self.preview_subs = None;
         self.player.destroy_gl(gl);
     }
 }
