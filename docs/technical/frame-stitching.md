@@ -26,6 +26,15 @@ then submits work to the existing [export runner](../../src/export/mod.rs). Stit
 the serial background worker with clip exports. Progress and results reach egui through job
 events. The [engine](../../src/stitch/mod.rs) can run without the GUI.
 
+In the engine, `run` decides which pans to attempt (the one nearest the playhead, then
+others in the window; a marked range whole, then the pans inside it), sets aside small
+results while looking for a larger one, and hands over to the forced fallback when
+enabled. Each attempt is [`solve`](../../src/stitch/solve.rs), in stages: `discover`
+picks the window, sampling rate and candidate pan; `Attempt::translation` solves and
+selects frames and `Attempt::align` places them at source resolution; `layered`,
+`similarity` and `fallback` are the other methods; `compose` builds the output.
+Decoded analysis frames are cached per job, so later attempts do not decode again.
+
 Playback stays with libmpv. Stitching uses the existing FFmpeg executable to read the first
 video stream from the source file. Player zoom, subtitles rendered by mpv and playback position
 changes have no effect on the decode. FFmpeg applies video orientation, and subtitles already
