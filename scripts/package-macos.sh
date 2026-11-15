@@ -15,7 +15,7 @@ cd "$root"
 brew_prefix="$(brew --prefix)"
 export LIBRARY_PATH="$brew_prefix/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 
-cargo build --release
+cargo build --locked --release
 version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
 
 dist="$root/dist"

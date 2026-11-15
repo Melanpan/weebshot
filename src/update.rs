@@ -288,7 +288,7 @@ fn windows_script(pid: u32, work: &Path, to: &Path) -> String {
          chcp 65001 >nul\r\n\
          :wait\r\n\
          tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n\
-         robocopy \"{from}\" \"{to}\" /E /NFL /NDL /NJH /NJS /NP >nul\r\n\
+         robocopy \"{from}\" \"{to}\" /E /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul\r\n\
          if errorlevel 8 (\r\n\
          powershell.exe -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Weebshot could not copy the update. Please download and install it manually.', 'Weebshot update failed') | Out-Null\"\r\n\
          rmdir /S /Q \"{work}\"\r\n\
@@ -383,6 +383,144 @@ mod tests {
         assert!(copy_at < restart_at && restart_at < cleanup_at);
         // The self-deleting cleanup must be the last command in the batch file.
         assert!(s.ends_with(&(cleanup + "\r\n")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_update_copies_restarts_and_handles_locked_files() {
+        use std::{
+            os::windows::fs::OpenOptionsExt,
+            time::{Duration, Instant},
+        };
+
+        let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let fixture = root.path.join("日本語 Zoë's update test");
+        std::fs::create_dir(&fixture).unwrap();
+        // A tiny native process records whether the updated app was restarted.
+        // The same executable stands in for the failure dialog so CI needs no
+        // interactive desktop. All copy/wait/cleanup commands remain real.
+        let helper = fixture.join("payload.exe");
+        let source = fixture.join("payload.cs");
+        std::fs::write(
+            &source,
+            r#"
+using System;
+using System.Diagnostics;
+using System.IO;
+public class Payload {
+    public static void Main() {
+        File.WriteAllText(Environment.GetEnvironmentVariable("WEEBSHOT_UPDATE_TEST_MARKER"),
+                          Process.GetCurrentProcess().ProcessName);
+    }
+}
+"#,
+        )
+        .unwrap();
+        let built = Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command",
+                "Add-Type -Path $env:WEEBSHOT_UPDATE_TEST_SOURCE -OutputAssembly $env:WEEBSHOT_UPDATE_TEST_EXE -OutputType ConsoleApplication"])
+            .env("WEEBSHOT_UPDATE_TEST_SOURCE", &source)
+            .env("WEEBSHOT_UPDATE_TEST_EXE", &helper)
+            .output().unwrap();
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let mock_bin = fixture.join("dialog stub");
+        std::fs::create_dir(&mock_bin).unwrap();
+        std::fs::copy(&helper, mock_bin.join("powershell.exe")).unwrap();
+
+        for locked in [false, true] {
+            let install = fixture.join(if locked {
+                "locked installation"
+            } else {
+                "installation"
+            });
+            std::fs::create_dir(&install).unwrap();
+            let destination = install.join("weebshot.exe");
+            std::fs::write(&destination, "old version").unwrap();
+            let lock = locked.then(|| {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(1)
+                    .open(&destination)
+                    .unwrap()
+            });
+            let work = update_workspace(&fixture).unwrap();
+            std::fs::create_dir(work.path.join("files")).unwrap();
+            std::fs::copy(&helper, work.path.join("files/weebshot.exe")).unwrap();
+            std::fs::write(work.path.join("files/new-resource.txt"), "new resource").unwrap();
+            // The helper must leave the old files alone while its parent lives.
+            let mut parent = Command::new("cmd.exe")
+                .args(["/D", "/C", "ping -n 3 127.0.0.1 >nul"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let script = work.path.join("apply-update.cmd");
+            std::fs::write(&script, windows_script(parent.id(), &work.path, &install)).unwrap();
+            let marker = fixture.join(if locked { "failure.txt" } else { "restart.txt" });
+            let mut paths = vec![mock_bin.clone()];
+            paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+            let mut child = Command::new("cmd.exe")
+                .args(["/D", "/C"])
+                .arg(&script)
+                .current_dir(&mock_bin)
+                .env("PATH", std::env::join_paths(paths).unwrap())
+                .env("WEEBSHOT_UPDATE_TEST_MARKER", &marker)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            thread::sleep(Duration::from_millis(200));
+            assert!(parent.try_wait().unwrap().is_none());
+            assert_eq!(std::fs::read(&destination).unwrap(), b"old version");
+            assert!(!marker.exists());
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = parent.kill();
+                    let _ = parent.wait();
+                    panic!("Windows update helper timed out (locked={locked})");
+                }
+                thread::sleep(Duration::from_millis(50));
+            };
+            parent.wait().unwrap();
+            assert_eq!(status.success(), !locked);
+            assert!(!work.path.exists(), "helper left its workspace behind");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let expected = if locked { "powershell" } else { "weebshot" };
+            while std::fs::read_to_string(&marker).ok().as_deref() != Some(expected)
+                && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(
+                std::fs::read_to_string(&marker).unwrap(),
+                if locked { "powershell" } else { "weebshot" }
+            );
+            if locked {
+                assert_eq!(std::fs::read(&destination).unwrap(), b"old version");
+            } else {
+                assert_eq!(
+                    std::fs::read(&destination).unwrap(),
+                    std::fs::read(&helper).unwrap()
+                );
+                assert_eq!(
+                    std::fs::read_to_string(install.join("new-resource.txt")).unwrap(),
+                    "new resource"
+                );
+            }
+            drop(lock);
+        }
     }
 
     #[cfg(windows)]

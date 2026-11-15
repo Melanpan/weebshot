@@ -168,7 +168,7 @@ cargo run --release
 **Linux** (Ubuntu 24.04 or newer, for libmpv 0.37+):
 
 ```sh
-sudo apt install libmpv-dev ffmpeg gifsicle libxkbcommon-dev libgl1-mesa-dev libwayland-dev \
+sudo apt install libmpv-dev ffmpeg gifsicle libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev libwayland-dev \
   libx11-dev libxcursor-dev libxrandr-dev libxi-dev
 cargo run --release
 ./scripts/package-linux.sh        # optional: AppImage in dist/

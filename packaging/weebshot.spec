@@ -8,7 +8,7 @@
 
 Name:           weebshot
 Version:        %{weebshot_version}
-Release:        2
+Release:        1
 Summary:        Frame-accurate anime screenshots, clips, and stitched artwork
 License:        GPL-3.0-or-later
 URL:            https://github.com/Melanpan/weebshot
@@ -70,6 +70,9 @@ install -Dm0644 %{appdir}/usr/share/doc/weebshot/THIRD-PARTY.md %{buildroot}%{_d
 %doc %{_datadir}/doc/weebshot/
 
 %changelog
+* Sun Nov 15 2026 Weebshot contributors - 0.5.0-1
+- Release 0.5.0 with MCP automation, searchable settings, and improved stitching.
+
 * Wed Nov 11 2026 Weebshot contributors - 0.4.0-2
 - Normalize installed permissions and ownership; test GUI as an unprivileged user.
 

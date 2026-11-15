@@ -259,6 +259,7 @@ pub fn run(headless: bool, socket: Option<std::path::PathBuf>) -> Result<()> {
 }
 
 /// Validate new GUI media away from the UI thread, before changing user state.
+#[cfg(unix)]
 pub fn preflight(request: &Request, cancel: &std::sync::atomic::AtomicBool) -> Result<()> {
     let a = &request.arguments;
     let path = match request.name.as_str() {

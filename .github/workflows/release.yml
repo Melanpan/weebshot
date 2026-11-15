@@ -14,23 +14,55 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate release version and notes
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version']
+          assert re.fullmatch(r'\d+\.\d+\.\d+', version), 'Expected a stable release version'
+          tag = os.environ['RELEASE_TAG']
+          assert not tag or tag == f'v{version}', f'Tag {tag} does not match Cargo version {version}'
+          lock = tomllib.loads(pathlib.Path('Cargo.lock').read_text())
+          assert next(p['version'] for p in lock['package'] if p['name'] == 'weebshot') == version
+          changelog = pathlib.Path('CHANGELOG.md').read_text()
+          section = re.search(rf'^## {re.escape(version)} — \d{{4}}-\d{{2}}-\d{{2}}\n(.*?)(?=^## |\Z)', changelog, re.M | re.S)
+          assert section and re.search(r'^- ', section[1], re.M), f'Missing release notes for {version}'
+          print(f'Release metadata verified: {version}')
+          PY
+
   windows:
+    needs: validate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Fetch libmpv
         run: ./scripts/fetch-libmpv.ps1
-      - run: cargo test
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
       - name: Build and package (with ffmpeg + gifsicle)
         run: ./scripts/package.ps1
+      - name: Test Anime4K with the packaged helper
+        run: |
+          $env:PATH = "$PWD\dist\weebshot;$env:PATH"
+          cargo test --locked export::anime4k::tests -- --ignored
       - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: dist/weebshot-windows-x64.zip
 
   linux:
+    needs: validate
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -41,7 +73,7 @@ jobs:
           # Avoid the hosted image's Ubuntu DNS failures; APT still verifies Ubuntu signatures.
           echo 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
           sudo apt-get -o APT::Update::Error-Mode=any update
-          sudo apt-get install -y --no-install-recommends libmpv-dev ffmpeg gifsicle libxkbcommon-dev libgl1-mesa-dev \
+          sudo apt-get install -y --no-install-recommends libmpv-dev ffmpeg gifsicle libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev \
             libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev file \
             libavformat-dev libavcodec-dev libavutil-dev ocl-icd-opencl-dev opencl-clhpp-headers \
             rpm desktop-file-utils
@@ -50,6 +82,8 @@ jobs:
       - run: cargo test
       - name: Build AppImage
         run: bash scripts/package-linux.sh
+      - name: Test Anime4K with the staged helper
+        run: cargo test --locked export::anime4k::tests -- --ignored
       - name: Package Fedora RPM
         run: bash scripts/package-rpm.sh
       - uses: actions/upload-artifact@v7
@@ -74,6 +108,7 @@ jobs:
             bash /work/scripts/test-rpm.sh /work/dist/weebshot-x86_64.rpm
 
   macos:
+    needs: validate
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -85,6 +120,8 @@ jobs:
         run: LIBRARY_PATH="$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" cargo test
       - name: Build app
         run: bash scripts/package-macos.sh
+      - name: Test Anime4K with the staged helper
+        run: PATH="$PWD/dist/weebshot.app/Contents/MacOS:$PATH" LIBRARY_PATH="$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" cargo test --locked export::anime4k::tests -- --ignored
       - uses: actions/upload-artifact@v7
         with:
           name: macos

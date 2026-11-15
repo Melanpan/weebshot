@@ -17,7 +17,7 @@ $Dist = Join-Path $Root 'dist\weebshot'
 $Cache = Join-Path $Root 'dist\cache'
 Push-Location $Root
 try {
-    cargo build --release
+    cargo build --locked --release
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 
     if (Test-Path $Dist) { Remove-Item -Recurse -Force $Dist }

@@ -11,7 +11,7 @@ LINUXDEPLOY_VERSION="1-alpha-20251107-1"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-cargo build --release
+cargo build --locked --release
 
 dist="$root/dist"
 appdir="$dist/AppDir"
@@ -51,6 +51,8 @@ export LDAI_OUTPUT="$dist/weebshot-x86_64.AppImage"
     --executable "$(command -v gifsicle)" \
     --executable "$helper_stage/bin/weebshot-anime4k" \
     --library "$(find_lib libOpenCL.so.1)" \
+    --library "$(find_lib libxkbcommon.so.0)" \
+    --library "$(find_lib libxkbcommon-x11.so.0)" \
     --library "$(find_lib libjack.so.0)" \
     --library "$(find_lib libusb-1.0.so.0)" \
     --library "$(find_lib libfribidi.so.0)" \

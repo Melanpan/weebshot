@@ -1,9 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-11-15
 
 ### New
 
+- **Optional MCP automation and headless operation** for media inspection, screenshots,
+  clips, and stitched PNG/PSD exports. Local clients can prepare selections in the GUI or
+  run without a display. Contact sheets, detailed frame batches, and scene detection help
+  find shots before exporting. Integration starts off; GUI attachment supports Linux and
+  macOS, and headless mode also supports Windows. See [MCP setup](docs/mcp.md).
+- **Searchable settings** with six categories, search that jumps to the matching control,
+  copyable commands and paths, and confirmations before replacing shortcut assignments.
+- **More stitch methods**: Shift, scale and rotation handles camera roll and zoom;
+  experimental Layered (two planes) separates foreground and background motion.
 - **Force a result** (Stitch tab and Options → Export → Auto Stitch, off by default). When
   Auto Stitch cannot align the frames reliably, it builds a rough stitch from each frame's
   best-guess shift instead of failing. The preview is marked **Forced · unverified**; save it
@@ -18,6 +27,17 @@
 
 ### Fixed
 
+- **Subtitle edits preserve unrelated events**, including hidden, malformed, and duplicate
+  layers. Retiming keeps ASS overrides, and preview files use private, isolated temporary
+  directories that are removed when no longer needed.
+- **Clip height limits no longer enlarge a cropped video** when Anime4K is off.
+- **Media loading reports success only after mpv loads the file**, and failed loads surface
+  their error. Pending seek actions retain their precision and the newest target wins.
+- **Shutdown cancels exports and allows workers time to clean up**; waveform decoding
+  handles partial sample reads, and screenshot frame selection retains fractional timing.
+- **Update downloads and helper scripts use isolated temporary workspaces**. Failed
+  preparations clean up automatically; Windows uses UTF-8 paths, reports copy failures,
+  and removes its workspace after applying the update.
 - **Auto Stitch no longer leaves jagged patches of colour** where the lighting itself
   changes during a pan (a coloured beam fading out, moving light rays). Evening out
   lighting handled only small differences, so a larger one was half corrected and showed

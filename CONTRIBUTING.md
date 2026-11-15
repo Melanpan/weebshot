@@ -12,7 +12,7 @@ its exe is locked; build into another target directory to keep working:
 The Linux build can be checked from Windows with Docker — the same steps CI runs:
 
 ```powershell
-docker run --rm -v "${PWD}:/src:ro" ubuntu:24.04 bash -c "apt-get update && apt-get install -y curl build-essential pkg-config libmpv-dev libxkbcommon-dev libgl1-mesa-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev && curl -sSf https://sh.rustup.rs | sh -s -- -y && . ~/.cargo/env && cp -r /src /work && cd /work && cargo test"
+docker run --rm -v "${PWD}:/src:ro" ubuntu:24.04 bash -c "apt-get update && apt-get install -y curl build-essential pkg-config libmpv-dev libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev && curl -sSf https://sh.rustup.rs | sh -s -- -y && . ~/.cargo/env && cp -r /src /work && cd /work && cargo test"
 ```
 
 ## Continuous integration and releases
@@ -29,10 +29,12 @@ docker run --rm -v "${PWD}:/src:ro" ubuntu:24.04 bash -c "apt-get update && apt-
 
 To release:
 
-1. Bump `version` in `Cargo.toml`, add a `## <version> — <date>` section to `CHANGELOG.md`
+1. Bump `version` in `Cargo.toml`, update `Cargo.lock`, add a `## <version> — <date>` section to `CHANGELOG.md`
    (it becomes the release notes, which the in-app updater shows), and commit.
-2. `git tag v0.2.0 && git push origin main v0.2.0`
-3. Wait for the *Release* workflow. Running copies of
+2. Push the preparation commit and wait for CI to pass. Run the *Release* workflow manually
+   on `main` to build and validate all packages without publishing.
+3. `git tag v0.5.0 && git push origin main v0.5.0`
+4. Wait for the *Release* workflow. Running copies of
    Weebshot will offer the update within a day (asset names must stay as they are — the updater
    looks for them).
 

@@ -1,5 +1,7 @@
 //! One bounded FIFO dispatcher for GUI automation, with an independent status cache.
-use super::{Engine, Media, Request, ipc::Pending};
+#[cfg(unix)]
+use super::Request;
+use super::{Engine, Media, ipc::Pending};
 use crate::{
     export::{SubSource, Tools},
     settings::Settings,
@@ -34,6 +36,7 @@ struct Work {
 struct CachedJob {
     state: Value,
     cancel: Arc<AtomicBool>,
+    #[cfg(unix)]
     image: bool,
 }
 #[derive(Default)]
@@ -68,6 +71,7 @@ impl Service {
                             CachedJob {
                                 state,
                                 cancel,
+                                #[cfg(unix)]
                                 image: engine.is_image_job(id),
                             },
                         )
@@ -156,6 +160,7 @@ impl Service {
             .map(|(id, j)| (*id, j.state.clone(), j.cancel.clone()))
             .collect()
     }
+    #[cfg(unix)]
     pub fn query(&self, request: &Request) -> Result<Value> {
         ensure!(
             !self.stop.load(Ordering::Relaxed),
