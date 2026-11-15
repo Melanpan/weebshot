@@ -155,8 +155,9 @@ Many shots carry lighting that is fixed to the screen instead of the artwork (a 
 a vignette, a haze gradient), so the same artwork is a few levels brighter in one frame
 than in the next and each seam would show as a faint band. **Even out lighting between
 frames** (Advanced, on by default) shifts each frame's broad colour to match the frames
-already placed. Lines and texture are untouched; turn it off to keep every pixel exactly
-as in the source.
+already placed. Lighting that changes during the shot, such as a coloured beam fading
+out, is joined smoothly at each seam instead, so later frames keep their own light.
+Lines and texture are untouched; turn it off to keep every pixel exactly as in the source.
 Overlap boundaries favour matching areas and avoid connected moving regions where
 possible, reducing cuts through changing poses.
 Diagonal paths can leave transparent corners.

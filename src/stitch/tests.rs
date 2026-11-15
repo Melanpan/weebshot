@@ -2618,3 +2618,70 @@ fn screen_fixed_lighting_leaves_no_seam_step() {
     assert_eq!(changed, 4);
     assert_eq!(step(false, true), (0.0, 0));
 }
+
+/// A coloured light that is in one frame and gone from the next differs by
+/// far more than screen-fixed lighting. The seam must still close, but the
+/// later frame keeps its own light away from the seam.
+#[test]
+fn fading_light_closes_the_seam_without_repainting_the_frame() {
+    let source = artwork(160, 400);
+    let base = |x: u32, y: u32| source.get_pixel(16 + x, 10 + y).0.map(|v| v / 2 + 40);
+    let beam = |x: u32| {
+        let t = (x as f32 / 127.0 * std::f32::consts::PI).sin();
+        (60.0 * t * t) as u8
+    };
+    let frame = |y: u32, lit: bool| {
+        RgbImage::from_fn(128, 96, |x, row| {
+            let mut pixel = base(x, y + row);
+            if lit {
+                pixel[1] += beam(x);
+            }
+            Rgb(pixel)
+        })
+    };
+    let cancel = AtomicBool::new(false);
+    let compose = |even: bool| {
+        let mut composer = compose::Composer::new((128, 96 + 32));
+        composer
+            .push(&frame(0, true), None, (0, 0), &cancel)
+            .unwrap();
+        let second = frame(32, false);
+        let evened = if even {
+            composer.matched(&second, None, (0, 32), &cancel).unwrap()
+        } else {
+            None
+        };
+        assert_eq!(evened.is_some(), even);
+        composer
+            .push(evened.as_ref().unwrap_or(&second), None, (0, 32), &cancel)
+            .unwrap();
+        composer.finish()
+    };
+    // Green light left in each row under the middle of the beam.
+    let light = |canvas: &RgbaImage| -> Vec<f32> {
+        (0..canvas.height())
+            .map(|y| {
+                (48..80)
+                    .map(|x| f32::from(canvas.get_pixel(x, y)[1]) - f32::from(base(x, y)[1]))
+                    .sum::<f32>()
+                    / 32.0
+            })
+            .collect()
+    };
+    let step = |rows: &[f32]| {
+        rows.windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max)
+    };
+    let hard = light(&compose(false));
+    let evened = light(&compose(true));
+    assert!(
+        step(&hard) > 30.0,
+        "fixture has no seam step: {}",
+        step(&hard)
+    );
+    assert!(step(&evened) < 8.0, "seam step remains: {}", step(&evened));
+    assert!(evened[0] > 50.0, "first frame changed: {}", evened[0]);
+    let last = evened[evened.len() - 1];
+    assert!(last < 10.0, "light carried across the frame: {last}");
+}

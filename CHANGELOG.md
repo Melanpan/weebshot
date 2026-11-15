@@ -18,6 +18,11 @@
 
 ### Fixed
 
+- **Auto Stitch no longer leaves jagged patches of colour** where the lighting itself
+  changes during a pan (a coloured beam fading out, moving light rays). Evening out
+  lighting handled only small differences, so a larger one was half corrected and showed
+  along the seam. It is now closed at the seam and released just behind it, and later
+  frames keep their own light.
 - **Subtitle lines shown at the same time** no longer cover each other in the timeline: a
   second row (S2) appears when a track has overlapping lines.
 - **Opening another video resets the preview zoom**, so it no longer starts zoomed and panned

@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use image::{GrayImage, RgbImage, RgbaImage};
 use std::sync::atomic::AtomicBool;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct Rect {
     x0: u32,
     y0: u32,
@@ -40,6 +40,9 @@ pub(super) struct Composer {
     previous: Option<Rect>,
     owners: Option<image::GrayImage>,
     source: u8,
+    /// The seam `matched` shaped its frame around, for the `push` of that
+    /// frame: where the frame lands and the path.
+    planned: Option<(Rect, Vec<u32>)>,
 }
 impl Composer {
     pub fn new(size: (u32, u32)) -> Self {
@@ -49,6 +52,7 @@ impl Composer {
             previous: None,
             owners: None,
             source: 0,
+            planned: None,
         }
     }
     pub fn track_sources(&mut self) {
@@ -94,23 +98,20 @@ impl Composer {
             x1,
             y1,
         };
-        let movement = self
-            .previous
-            .map(|p| (offset.0 as i64 - p.x0 as i64, offset.1 as i64 - p.y0 as i64));
-        if self.previous.is_some_and(|p| {
-            p.x0 == rect.x0 && p.y0 == rect.y0 && p.x1 == rect.x1 && p.y1 == rect.y1
-        }) {
+        let planned = self.planned.take();
+        if self.previous == Some(rect) {
             return Ok(());
         }
-        let vertical = movement.is_none_or(|(dx, dy)| dy.abs() >= dx.abs());
-        let positive = movement.is_none_or(|(dx, dy)| if vertical { dy > 0 } else { dx > 0 });
+        let (vertical, positive) = self.direction(rect);
         let overlap = self.covered.and_then(|r| r.intersection(rect));
         if self.covered.is_some() && overlap.is_none() {
             bail!("Selected frames do not overlap. Include an intermediate frame.");
         }
-        let seam = overlap
-            .map(|r| self.seam(frame, mask, offset, r, vertical, cancel))
-            .transpose()?;
+        let seam = match (overlap, planned) {
+            (Some(_), Some((planned, path))) if planned == rect => Some(path),
+            (Some(r), _) => Some(self.seam(frame, mask, offset, r, vertical, cancel)?),
+            (None, _) => None,
+        };
         for y in 0..frame.height() {
             if y % 32 == 0 {
                 check_cancel(cancel)?;
@@ -153,8 +154,23 @@ impl Composer {
         Ok(())
     }
 
+    /// Whether a frame at `rect` continues along y, and towards larger
+    /// coordinates, judged from the frame before it.
+    fn direction(&self, rect: Rect) -> (bool, bool) {
+        let movement = self.previous.map(|p| {
+            (
+                i64::from(rect.x0) - i64::from(p.x0),
+                i64::from(rect.y0) - i64::from(p.y0),
+            )
+        });
+        let vertical = movement.is_none_or(|(dx, dy)| dy.abs() >= dx.abs());
+        let positive = movement.is_none_or(|(dx, dy)| if vertical { dy > 0 } else { dx > 0 });
+        (vertical, positive)
+    }
+
     /// `frame` with its broad colour shifted to agree with what the canvas
-    /// already holds, or `None` when nothing needs to change.
+    /// already holds, or `None` when nothing needs to change. Call it right
+    /// before the `push` of the same frame.
     ///
     /// Shots often carry lighting fixed to the screen instead of the artwork
     /// (a vignette, a glow, a haze gradient), so the same artwork differs by
@@ -163,139 +179,220 @@ impl Composer {
     /// ignoring cells that mostly disagree (animation), smoothed, carried
     /// into the newly revealed area with a falloff, and added back. Only
     /// that smooth field changes: lines and texture keep their source pixels.
+    ///
+    /// Lighting that itself changes during the shot (a coloured beam fading
+    /// out) differs by far more. Carrying that much across a frame would
+    /// repaint it in an earlier moment's light, so only `BROAD` levels are
+    /// carried; the rest is added in full at the seam, where it closes the
+    /// step, and released over a short distance behind it.
     pub fn matched(
-        &self,
+        &mut self,
         frame: &RgbImage,
         mask: Option<&GrayImage>,
         offset: (u32, u32),
         cancel: &AtomicBool,
     ) -> Result<Option<RgbImage>> {
         const CELL: u32 = 16;
-        // Differences beyond this are a different drawing, not lighting.
-        const OUTLIER: i32 = 40;
-        const LIMIT: f32 = 32.0;
+        // Within a cell, lighting moves every pixel by about the same amount;
+        // pixels further than this from the cell's typical difference are a
+        // different drawing or an edge that moved.
+        const SPREAD: i32 = 14;
+        // Beyond this a cell is a different drawing, however even it is.
+        const LIMIT: i32 = 96;
+        // Differences up to this are taken as lighting on their own. Larger
+        // ones (a coloured light fading in or out) must be reached from such
+        // cells in steps of at most `STEP`, which a soft light is and the
+        // inside of a repainted shape, ringed by cells of mixed pixels, is not.
+        const SOFT: f32 = 32.0;
+        const STEP: f32 = 32.0;
+        // The most that is carried across the frame.
+        const BROAD: f32 = 32.0;
         let (w, h) = frame.dimensions();
-        if self.covered.is_none()
-            || offset.0 + w > self.canvas.width()
-            || offset.1 + h > self.canvas.height()
-        {
+        self.planned = None;
+        if offset.0 + w > self.canvas.width() || offset.1 + h > self.canvas.height() {
+            return Ok(None);
+        }
+        let rect = Rect {
+            x0: offset.0,
+            y0: offset.1,
+            x1: offset.0 + w,
+            y1: offset.1 + h,
+        };
+        let Some(overlap) = self.covered.and_then(|r| r.intersection(rect)) else {
+            return Ok(None);
+        };
+        if self.previous == Some(rect) {
             return Ok(None);
         }
         let (gw, gh) = (w.div_ceil(CELL) as usize, h.div_ceil(CELL) as usize);
         let mut field = vec![[0.0f32; 3]; gw * gh];
         let mut known = vec![false; gw * gh];
+        let mut samples: Vec<[i32; 3]> = Vec::with_capacity((CELL * CELL / 4) as usize);
+        let mut channel: Vec<i32> = Vec::with_capacity(samples.capacity());
         for gy in 0..gh {
             check_cancel(cancel)?;
             for gx in 0..gw {
-                let (mut sum, mut agree, mut seen) = ([0i32; 3], 0u32, 0u32);
+                samples.clear();
                 for y in (gy as u32 * CELL..((gy as u32 + 1) * CELL).min(h)).step_by(2) {
                     for x in (gx as u32 * CELL..((gx as u32 + 1) * CELL).min(w)).step_by(2) {
                         let old = self.canvas.get_pixel(offset.0 + x, offset.1 + y);
                         if old[3] == 0 || mask.is_some_and(|m| m.get_pixel(x, y)[0] == 0) {
                             continue;
                         }
-                        seen += 1;
                         let new = frame.get_pixel(x, y);
-                        let d = [0, 1, 2].map(|c| i32::from(old[c]) - i32::from(new[c]));
-                        if d.iter().all(|d| d.abs() < OUTLIER) {
-                            agree += 1;
-                            for c in 0..3 {
-                                sum[c] += d[c];
-                            }
+                        samples.push([0, 1, 2].map(|c| i32::from(old[c]) - i32::from(new[c])));
+                    }
+                }
+                // A cell on the canvas edge says nothing reliable.
+                if samples.len() < (CELL * CELL / 8) as usize {
+                    continue;
+                }
+                let typical = [0, 1, 2].map(|c| {
+                    channel.clear();
+                    channel.extend(samples.iter().map(|d| d[c]));
+                    let middle = channel.len() / 2;
+                    *channel.select_nth_unstable(middle).1
+                });
+                if typical.iter().any(|v| v.abs() > LIMIT) {
+                    continue;
+                }
+                let (mut sum, mut agree) = ([0i32; 3], 0usize);
+                for d in &samples {
+                    if (0..3).all(|c| (d[c] - typical[c]).abs() < SPREAD) {
+                        agree += 1;
+                        for c in 0..3 {
+                            sum[c] += d[c];
                         }
                     }
                 }
-                // A cell on the canvas edge or one that mostly disagrees says
-                // nothing reliable about lighting.
-                if seen >= CELL * CELL / 8 && agree * 4 >= seen * 3 {
+                // Nor does one that mostly disagrees with itself.
+                if agree * 4 >= samples.len() * 3 {
                     let i = gy * gw + gx;
                     known[i] = true;
-                    field[i] = sum.map(|v| (v as f32 / agree as f32).clamp(-LIMIT, LIMIT));
+                    field[i] = sum.map(|v| v as f32 / agree as f32);
                 }
             }
         }
-        if !known.iter().any(|&k| k) || field.iter().all(|v| v.iter().all(|c| c.abs() < 0.5)) {
-            return Ok(None);
-        }
-        // Distance in cells from the measured area, and each unmeasured cell's
-        // value from its already-filled neighbours.
-        let mut distance = vec![u32::MAX; gw * gh];
-        let mut queue: std::collections::VecDeque<usize> = (0..gw * gh)
-            .filter(|&i| known[i])
-            .inspect(|&i| distance[i] = 0)
+        // Keep large differences only where they join the small ones smoothly.
+        let mut reached: Vec<bool> = (0..gw * gh)
+            .map(|i| known[i] && field[i].iter().all(|v| v.abs() <= SOFT))
             .collect();
-        let neighbours = |i: usize| {
+        let mut stack: Vec<usize> = (0..gw * gh).filter(|&i| reached[i]).collect();
+        while let Some(i) = stack.pop() {
             let (x, y) = (i % gw, i / gw);
-            [
+            let around = [
                 (x > 0).then(|| i - 1),
                 (x + 1 < gw).then_some(i + 1),
                 (y > 0).then(|| i - gw),
                 (y + 1 < gh).then_some(i + gw),
-            ]
-            .into_iter()
-            .flatten()
+            ];
+            for n in around.into_iter().flatten() {
+                if known[n]
+                    && !reached[n]
+                    && (0..3).all(|c| (field[n][c] - field[i][c]).abs() <= STEP)
+                {
+                    reached[n] = true;
+                    stack.push(n);
+                }
+            }
+        }
+        for i in 0..gw * gh {
+            if !reached[i] {
+                known[i] = false;
+                field[i] = [0.0; 3];
+            }
+        }
+        if !known.iter().any(|&k| k) {
+            return Ok(None);
+        }
+        // What is carried across the frame comes only from the cells that
+        // differ a little; the rest is treated there as not measured.
+        let modest: Vec<bool> = (0..gw * gh)
+            .map(|i| known[i] && field[i].iter().all(|v| v.abs() <= BROAD))
+            .collect();
+        let whole = spread(field.clone(), &known, gw, gh);
+        let broad = if modest.iter().any(|&m| m) {
+            spread(field, &modest, gw, gh)
+        } else {
+            vec![[0.0; 3]; gw * gh]
         };
-        while let Some(i) = queue.pop_front() {
-            for n in neighbours(i) {
-                if distance[n] == u32::MAX {
-                    distance[n] = distance[i] + 1;
-                    let (mut sum, mut count) = ([0.0f32; 3], 0.0f32);
-                    for m in neighbours(n).filter(|&m| distance[m] <= distance[i]) {
-                        for c in 0..3 {
-                            sum[c] += field[m][c];
-                        }
-                        count += 1.0;
-                    }
-                    field[n] = sum.map(|v| v / count);
-                    queue.push_back(n);
-                }
-            }
+        let differs = |a: &[f32; 3], b: &[f32; 3]| (0..3).any(|c| (a[c] - b[c]).abs() >= 2.0);
+        let local = whole.iter().zip(&broad).any(|(a, b)| differs(a, b));
+        if !local && broad.iter().all(|v| v.iter().all(|c| c.abs() < 0.5)) {
+            return Ok(None);
         }
-        // Let go of the correction over a third of the frame beyond the
-        // measured area, so a new strip joins smoothly but lighting is not
-        // dragged across the whole stitch.
-        let reach = (gw.max(gh) / 3).max(2) as f32;
-        for (value, &d) in field.iter_mut().zip(&distance) {
-            let t = (1.0 - d as f32 / reach).clamp(0.0, 1.0);
-            let falloff = t * t * (3.0 - 2.0 * t);
-            *value = value.map(|v| v * falloff);
-        }
-        // Smooth cell-to-cell noise and the fill pattern.
-        for _ in 0..3 {
-            let previous = field.clone();
-            for i in 0..gw * gh {
-                let (mut sum, mut count) = (previous[i], 1.0f32);
-                for n in neighbours(i) {
-                    for c in 0..3 {
-                        sum[c] += previous[n][c];
-                    }
-                    count += 1.0;
-                }
-                field[i] = sum.map(|v| v / count);
-            }
-        }
-        let mut out = frame.clone();
         let cell = CELL as f32;
+        let sample = |field: &[[f32; 3]], x: u32, y: u32| {
+            let fy = ((y as f32 + 0.5) / cell - 0.5).clamp(0.0, (gh - 1) as f32);
+            let (y0, ty) = (fy as usize, fy.fract());
+            let y1 = (y0 + 1).min(gh - 1);
+            let fx = ((x as f32 + 0.5) / cell - 0.5).clamp(0.0, (gw - 1) as f32);
+            let (x0, tx) = (fx as usize, fx.fract());
+            let x1 = (x0 + 1).min(gw - 1);
+            [0, 1, 2].map(|c| {
+                let top = field[y0 * gw + x0][c] * (1.0 - tx) + field[y0 * gw + x1][c] * tx;
+                let bottom = field[y1 * gw + x0][c] * (1.0 - tx) + field[y1 * gw + x1][c] * tx;
+                top * (1.0 - ty) + bottom * ty
+            })
+        };
+        let shifted = |field: &[[f32; 3]]| -> Result<RgbImage> {
+            let mut out = frame.clone();
+            for y in 0..h {
+                if y % 64 == 0 {
+                    check_cancel(cancel)?;
+                }
+                for x in 0..w {
+                    let shift = sample(field, x, y);
+                    let pixel = out.get_pixel_mut(x, y);
+                    for c in 0..3 {
+                        pixel[c] = (f32::from(pixel[c]) + shift[c]).round().clamp(0.0, 255.0) as u8;
+                    }
+                }
+            }
+            Ok(out)
+        };
+        if !local {
+            return Ok(Some(shifted(&broad)?));
+        }
+        // With the whole difference added the frame agrees with the canvas
+        // as well as it can, so that is what the seam is chosen on: light
+        // that changed is no reason to cut elsewhere.
+        let mut out = shifted(&whole)?;
+        let (vertical, positive) = self.direction(rect);
+        let path = self.seam(&out, mask, offset, overlap, vertical, cancel)?;
+        let release = (if vertical { h } else { w } / 8).max(CELL) as f32;
         for y in 0..h {
             if y % 64 == 0 {
                 check_cancel(cancel)?;
             }
-            let fy = ((y as f32 + 0.5) / cell - 0.5).clamp(0.0, (gh - 1) as f32);
-            let (y0, ty) = (fy as usize, fy.fract());
-            let y1 = (y0 + 1).min(gh - 1);
             for x in 0..w {
-                let fx = ((x as f32 + 0.5) / cell - 0.5).clamp(0.0, (gw - 1) as f32);
-                let (x0, tx) = (fx as usize, fx.fract());
-                let x1 = (x0 + 1).min(gw - 1);
+                let (cx, cy) = (offset.0 + x, offset.1 + y);
+                let (cross, along) = if vertical {
+                    (cx.clamp(overlap.x0, overlap.x1 - 1) - overlap.x0, cy)
+                } else {
+                    (cy.clamp(overlap.y0, overlap.y1 - 1) - overlap.y0, cx)
+                };
+                let boundary = path[cross as usize];
+                let behind = if positive {
+                    along as f32 - boundary as f32
+                } else {
+                    boundary as f32 - along as f32
+                };
+                let t = (1.0 - behind / release).clamp(0.0, 1.0);
+                if t >= 1.0 {
+                    continue;
+                }
+                let kept = t * t * (3.0 - 2.0 * t);
+                let (far, near) = (sample(&broad, x, y), sample(&whole, x, y));
+                let source = frame.get_pixel(x, y);
                 let pixel = out.get_pixel_mut(x, y);
                 for c in 0..3 {
-                    let top = field[y0 * gw + x0][c] * (1.0 - tx) + field[y0 * gw + x1][c] * tx;
-                    let bottom = field[y1 * gw + x0][c] * (1.0 - tx) + field[y1 * gw + x1][c] * tx;
-                    let shift = top * (1.0 - ty) + bottom * ty;
-                    pixel[c] = (f32::from(pixel[c]) + shift).round().clamp(0.0, 255.0) as u8;
+                    let shift = far[c] + (near[c] - far[c]) * kept;
+                    pixel[c] = (f32::from(source[c]) + shift).round().clamp(0.0, 255.0) as u8;
                 }
             }
         }
+        self.planned = Some((rect, path));
         Ok(Some(out))
     }
 
@@ -396,6 +493,69 @@ impl Composer {
             })
             .collect())
     }
+}
+
+/// A cell field made whole and smooth: each unmeasured cell takes its value
+/// from the measured ones nearest it, fading out with distance.
+fn spread(mut field: Vec<[f32; 3]>, known: &[bool], gw: usize, gh: usize) -> Vec<[f32; 3]> {
+    // Distance in cells from the measured area, and each unmeasured cell's
+    // value from its already-filled neighbours.
+    let mut distance = vec![u32::MAX; gw * gh];
+    let mut queue: std::collections::VecDeque<usize> = (0..gw * gh)
+        .filter(|&i| known[i])
+        .inspect(|&i| distance[i] = 0)
+        .collect();
+    let neighbours = |i: usize| {
+        let (x, y) = (i % gw, i / gw);
+        [
+            (x > 0).then(|| i - 1),
+            (x + 1 < gw).then_some(i + 1),
+            (y > 0).then(|| i - gw),
+            (y + 1 < gh).then_some(i + gw),
+        ]
+        .into_iter()
+        .flatten()
+    };
+    while let Some(i) = queue.pop_front() {
+        for n in neighbours(i) {
+            if distance[n] == u32::MAX {
+                distance[n] = distance[i] + 1;
+                let (mut sum, mut count) = ([0.0f32; 3], 0.0f32);
+                for m in neighbours(n).filter(|&m| distance[m] <= distance[i]) {
+                    for c in 0..3 {
+                        sum[c] += field[m][c];
+                    }
+                    count += 1.0;
+                }
+                field[n] = sum.map(|v| v / count);
+                queue.push_back(n);
+            }
+        }
+    }
+    // Let go of the correction over a third of the frame beyond the
+    // measured area, so a new strip joins smoothly but lighting is not
+    // dragged across the whole stitch.
+    let reach = (gw.max(gh) / 3).max(2) as f32;
+    for (value, &d) in field.iter_mut().zip(&distance) {
+        let t = (1.0 - d as f32 / reach).clamp(0.0, 1.0);
+        let falloff = t * t * (3.0 - 2.0 * t);
+        *value = value.map(|v| v * falloff);
+    }
+    // Smooth cell-to-cell noise and the fill pattern.
+    for _ in 0..3 {
+        let previous = field.clone();
+        for i in 0..gw * gh {
+            let (mut sum, mut count) = (previous[i], 1.0f32);
+            for n in neighbours(i) {
+                for c in 0..3 {
+                    sum[c] += previous[n][c];
+                }
+                count += 1.0;
+            }
+            field[i] = sum.map(|v| v / count);
+        }
+    }
+    field
 }
 
 /// A seam must not cross the unchanged intersection of two different arm poses.

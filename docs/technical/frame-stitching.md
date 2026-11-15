@@ -153,16 +153,28 @@ lets the user inspect the result and try a different set of frames.
 
 Compositing effects fixed to the screen (vignettes, glows, haze gradients) make the same
 artwork differ by a few levels between frames, which a hard seam shows as a step. Before
-a frame is placed, `Composer::matched` measures the mean colour difference between the
-canvas and the frame in 16-pixel cells of their overlap. Pixels differing by 40 levels or
-more are a different drawing and are ignored, and a cell where more than a quarter of the
-pixels disagree is not used. The cell values are limited to ±32 levels, extended into the
-newly revealed area from their nearest measured neighbours with a falloff over a third of
-the frame, smoothed, interpolated per pixel and added to the frame. Only this smooth field
-changes, so lines keep their source pixels, and frames that already agree are passed
-through untouched. The corrected frame is what the seam search, the canvas and the PSD
-layers receive, so layers still rebuild the merged image exactly. The Layered (two planes)
-compositor does not use it.
+a frame is placed, `Composer::matched` measures the colour difference between the canvas
+and the frame in 16-pixel cells of their overlap. A cell's value is the mean of the pixels
+within 14 levels of its median difference; a cell where more than a quarter of the pixels
+fall outside that, or whose median exceeds 96 levels, is a different drawing and is not
+used. Cells differing by more than 32 levels are kept only when they connect to smaller
+ones through neighbours at most 32 levels apart, which a soft light does and the inside
+of a repainted shape, ringed by cells of mixed pixels, does not.
+
+Two fields are built from the cells, each extended into the newly revealed area from its
+nearest measured neighbours with a falloff over a third of the frame and smoothed. The
+*carried* field uses only cells within ±32 levels and is added to the whole frame. The
+*whole* field uses every kept cell. Where they differ, the lighting itself changed during
+the shot (a coloured beam fading out, moving rays): carrying that across a frame would
+repaint it in an earlier moment's light, and leaving it out shows a jagged step along the
+seam. The seam is therefore chosen on the frame with the whole field added, the whole
+field is applied up to the seam, and it is released to the carried field over an eighth
+of the frame behind the seam. `matched` hands that seam to the following `push`.
+
+Only these smooth fields change, so lines keep their source pixels, and frames that
+already agree are passed through untouched. The corrected frame is what the seam search,
+the canvas and the PSD layers receive, so layers still rebuild the merged image exactly.
+The Layered (two planes) compositor does not use it.
 
 ## Frame choices, preview and export
 
