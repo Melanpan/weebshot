@@ -36,7 +36,7 @@
 - **Shutdown cancels exports and allows workers time to clean up**; waveform decoding
   handles partial sample reads, and screenshot frame selection retains fractional timing.
 - **Update downloads and helper scripts use isolated temporary workspaces**. Failed
-  preparations clean up automatically; Windows uses UTF-8 paths, reports copy failures,
+  preparations clean up automatically; Windows preserves non-ASCII paths, reports copy failures,
   and removes its workspace after applying the update.
 - **Auto Stitch no longer leaves jagged patches of colour** where the lighting itself
   changes during a pan (a coloured beam fading out, moving light rays). Evening out

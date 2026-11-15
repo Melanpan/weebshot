@@ -23,7 +23,9 @@ jobs:
         run: choco install ffmpeg --no-progress -y
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - name: Test Windows updater
+        run: cargo test --locked update::tests
+      - run: cargo test --locked -- --skip update::tests
 
   linux:
     runs-on: ubuntu-24.04

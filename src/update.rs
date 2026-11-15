@@ -269,10 +269,9 @@ fn install_windows(url: &str, work: Scratch) -> Result<(), String> {
     }
 
     let script = work.path.join("apply-update.cmd");
-    let body = windows_script(std::process::id(), &work.path, dir);
+    let body = windows_script(std::process::id());
     std::fs::write(&script, body).map_err(|e| e.to_string())?;
-    let mut cmd = Command::new("cmd.exe");
-    cmd.args(["/D", "/C"]).arg(&script);
+    let mut cmd = windows_command(&script, &work.path, dir);
     hide_console(&mut cmd);
     cmd.spawn().map_err(|e| e.to_string())?;
     // The helper needs its script and unpacked files after this process exits.
@@ -281,13 +280,26 @@ fn install_windows(url: &str, work: Scratch) -> Result<(), String> {
     Ok(())
 }
 
-fn windows_script(pid: u32, work: &Path, to: &Path) -> String {
+// Keep paths in the Unicode environment block, rather than decoding them out
+// of a batch file using cmd.exe's active console code page.
+fn windows_command(script: &Path, work: &Path, to: &Path) -> Command {
+    let mut command = Command::new("cmd.exe");
+    command
+        .args(["/D", "/C"])
+        .arg(script)
+        .env("WEEBSHOT_UPDATE_WORK", work)
+        .env("WEEBSHOT_UPDATE_TO", to)
+        .stdin(Stdio::null());
+    command
+}
+
+fn windows_script(pid: u32) -> String {
     format!(
         "@echo off\r\n\
          setlocal DisableDelayedExpansion\r\n\
          chcp 65001 >nul\r\n\
          :wait\r\n\
-         tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n\
+         tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (ping -n 2 127.0.0.1 >nul & goto wait)\r\n\
          robocopy \"{from}\" \"{to}\" /E /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul\r\n\
          if errorlevel 8 (\r\n\
          powershell.exe -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Weebshot could not copy the update. Please download and install it manually.', 'Weebshot update failed') | Out-Null\"\r\n\
@@ -296,10 +308,10 @@ fn windows_script(pid: u32, work: &Path, to: &Path) -> String {
          )\r\n\
          start \"\" \"{exe}\"\r\n\
          rmdir /S /Q \"{work}\" & exit /b 0\r\n",
-        work = work.display(),
-        from = work.join("files").display(),
-        to = to.display(),
-        exe = to.join("weebshot.exe").display(),
+        work = "%WEEBSHOT_UPDATE_WORK%",
+        from = r"%WEEBSHOT_UPDATE_WORK%\files",
+        to = "%WEEBSHOT_UPDATE_TO%",
+        exe = r"%WEEBSHOT_UPDATE_TO%\weebshot.exe",
     )
 }
 
@@ -360,30 +372,24 @@ mod tests {
 
     #[test]
     fn windows_script_waits_copies_restarts_and_cleans_up() {
-        let work = Path::new("update workspace");
-        let to = Path::new("install directory");
-        let s = windows_script(1234, work, to);
-        let copy = format!(
-            r#"robocopy "{}" "{}" /E"#,
-            work.join("files").display(),
-            to.display()
-        );
-        let restart = format!(r#"start "" "{}""#, to.join("weebshot.exe").display());
-        let cleanup = format!(r#"rmdir /S /Q "{}""#, work.display());
+        let s = windows_script(1234);
+        let copy = r#"robocopy "%WEEBSHOT_UPDATE_WORK%\files" "%WEEBSHOT_UPDATE_TO%" /E"#;
+        let restart = r#"start "" "%WEEBSHOT_UPDATE_TO%\weebshot.exe""#;
+        let cleanup = r#"rmdir /S /Q "%WEEBSHOT_UPDATE_WORK%""#;
         assert!(s.contains("PID eq 1234"));
         assert!(s.find("chcp 65001").unwrap() < s.find(":wait").unwrap());
         let failure = s.find("if errorlevel 8 (").unwrap();
-        assert!(s.find(&copy).unwrap() < failure);
+        assert!(s.find(copy).unwrap() < failure);
         assert!(failure < s.find("exit /b 1").unwrap());
-        assert!(s.find("exit /b 1").unwrap() < s.find(&restart).unwrap());
-        let copy_at = s.find(&copy).unwrap();
-        let restart_at = s.find(&restart).unwrap();
-        let cleanup_at = s.rfind(&cleanup).unwrap();
+        assert!(s.find("exit /b 1").unwrap() < s.find(restart).unwrap());
+        let copy_at = s.find(copy).unwrap();
+        let restart_at = s.find(restart).unwrap();
+        let cleanup_at = s.rfind(cleanup).unwrap();
         assert!(s.find(":wait").unwrap() < copy_at);
         assert!(copy_at < restart_at && restart_at < cleanup_at);
         // Parse the explicit successful exit before deleting the batch file.
         // Robocopy returns 1 for a successful copy, which must not leak out.
-        assert!(s.ends_with(&(cleanup + " & exit /b 0\r\n")));
+        assert!(s.ends_with(&format!("{cleanup} & exit /b 0\r\n")));
     }
 
     #[cfg(windows)]
@@ -461,15 +467,17 @@ public class Payload {
                 .spawn()
                 .unwrap();
             let script = work.path.join("apply-update.cmd");
-            std::fs::write(&script, windows_script(parent.id(), &work.path, &install)).unwrap();
+            std::fs::write(
+                &script,
+                windows_script(parent.id()).replace(" /NP >nul", " /NP"),
+            )
+            .unwrap();
             let marker = fixture.join(if locked { "failure.txt" } else { "restart.txt" });
             let mut paths = vec![mock_bin.clone()];
             paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
             let log = fixture.join(if locked { "failure.log" } else { "success.log" });
             let output = std::fs::File::create(&log).unwrap();
-            let mut child = Command::new("cmd.exe")
-                .args(["/D", "/C"])
-                .arg(&script)
+            let mut child = windows_command(&script, &work.path, &install)
                 .current_dir(&mock_bin)
                 .env("PATH", std::env::join_paths(paths).unwrap())
                 .env("WEEBSHOT_UPDATE_TEST_MARKER", &marker)
@@ -537,14 +545,12 @@ public class Payload {
         let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
         let work = update_workspace(&root.path).unwrap();
         let script = work.path.join("apply-update.cmd");
-        let body = windows_script(1234, &work.path, &root.path);
+        let body = windows_script(1234);
         // Exercise the actual final command without replacing or restarting an app.
         let cleanup = body.lines().last().unwrap();
         std::fs::write(&script, format!("@echo off\r\n{cleanup}\r\n")).unwrap();
         let path = work.keep();
-        let output = Command::new("cmd.exe")
-            .args(["/D", "/C"])
-            .arg(&script)
+        let output = windows_command(&script, &path, &root.path)
             .current_dir(&root.path)
             .output()
             .unwrap();
@@ -556,13 +562,21 @@ public class Payload {
     }
 
     #[test]
-    fn windows_script_selects_utf8_before_non_ascii_paths() {
-        let work = Path::new("Users/Zoë/update");
-        let to = Path::new("Users/Zoë/Weebshot");
-        let script = windows_script(1234, work, to);
-        assert!(script.find("chcp 65001").unwrap() < script.find("Zoë").unwrap());
-        assert!(script.contains(&work.join("files").display().to_string()));
-        assert!(script.contains(&to.join("weebshot.exe").display().to_string()));
+    fn windows_helper_preserves_paths_in_unicode_environment() {
+        let work = Path::new("Users/日本語 Zoë's/update");
+        let to = Path::new("Users/日本語 Zoë's/Weebshot");
+        let script = windows_script(1234);
+        assert!(script.is_ascii());
+        let command = windows_command(&work.join("apply-update.cmd"), work, to);
+        let environment = command.get_envs().collect::<Vec<_>>();
+        assert!(environment.contains(&(
+            std::ffi::OsStr::new("WEEBSHOT_UPDATE_WORK"),
+            Some(work.as_os_str())
+        )));
+        assert!(environment.contains(&(
+            std::ffi::OsStr::new("WEEBSHOT_UPDATE_TO"),
+            Some(to.as_os_str())
+        )));
     }
 
     #[test]
