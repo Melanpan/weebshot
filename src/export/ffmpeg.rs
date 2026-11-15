@@ -180,13 +180,11 @@ impl ClipJob {
             subtitle_chain(self.start, self.subs.as_ref(), self.crop, false)
         };
 
+        let height = self.crop.map(|crop| crop.height).or(self.src_height);
         let height = if self.anime4k.enabled {
-            self.crop
-                .map(|crop| crop.height)
-                .or(self.src_height)
-                .map(|h| h.saturating_mul(2))
+            height.map(|h| h.saturating_mul(2))
         } else {
-            self.src_height
+            height
         };
         if let Some(h) = self.max_height
             && height.is_none_or(|src| h < src)
@@ -980,6 +978,38 @@ mod tests {
         j.max_height = Some(1080);
         j.src_height = Some(720);
         assert!(!j.video_chain().1.iter().any(|f| f.starts_with("scale=")));
+    }
+
+    #[test]
+    fn cropped_export_height_limits() {
+        for format in ClipFormat::ALL {
+            for src_height in [Some(1080), None] {
+                for anime4k in [false, true] {
+                    let mut j = job(format);
+                    j.src_height = src_height;
+                    j.crop = Some(Crop {
+                        x: 0,
+                        y: 0,
+                        width: 960,
+                        height: 540,
+                    });
+                    j.anime4k.enabled = anime4k;
+                    let effective_height = if anime4k { 1080 } else { 540 };
+                    for limit in [360, 540, 720, 1080, 1440] {
+                        j.max_height = Some(limit);
+                        let filters = j.video_chain().1;
+                        let scale = filters.iter().find(|f| f.starts_with("scale="));
+                        let expected = (limit < effective_height)
+                            .then(|| format!("scale=-2:{limit}:flags=lanczos"));
+                        assert_eq!(
+                            scale,
+                            expected.as_ref(),
+                            "{format:?}, source {src_height:?}, Anime4K {anime4k}, limit {limit}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

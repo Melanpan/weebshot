@@ -14,21 +14,7 @@ settings UI, the keymap, and the native Anime4K helper.
 
 ## Bugs
 
-Ordered roughly by impact. The first two change export output.
-
-### 1. Cropped exports get upscaled
-
-[`src/export/ffmpeg.rs:183`](../../src/export/ffmpeg.rs)
-
-`video_chain` only adds a `scale` filter when `max_height` is below the source height, so
-that a clip is never upscaled. Without Anime4K, the height it compares against is
-`src_height`, ignoring the crop. A 540 px crop from a 1080p source with a 720p limit
-passes the check (720 < 1080) and is scaled up to 720. GIF and WebP heights are affected
-the same way.
-
-The Anime4K branch already uses the crop height. Fix: use
-`self.crop.map(|c| c.height).or(self.src_height)` in both branches, and extend the
-`no_upscale` test with a crop.
+Ordered roughly by impact; original finding numbers are retained.
 
 ### 2. Editing multiline subtitles flattens line breaks
 
@@ -220,7 +206,6 @@ sub-visibility toggle must be restored when that reply arrives rather than immed
 
 ## Suggested order
 
-1. Bug 1, because it silently changes the resolution of exported files.
-2. Bugs 5, 6 and 8, which are small, contained fixes.
-3. Optimization 1, then 2.
-4. The rest as time allows; bug 9 needs a Windows machine.
+1. Bugs 5, 6 and 8, which are small, contained fixes.
+2. Optimization 1, then 2.
+3. The rest as time allows; bug 9 needs a Windows machine.
