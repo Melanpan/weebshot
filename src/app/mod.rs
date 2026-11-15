@@ -498,11 +498,10 @@ impl App {
     /// Once cues are edited, mpv shows them from a scratch .ass (reusing the original
     /// styles) instead of natively rendering the original track — there's no way to
     /// patch just one line of that in place. Rewritten and reloaded after every further
-    /// edit; reverted once the edits no longer apply (track switched, or every line
-    /// deleted).
+    /// edit; reverted once the edits no longer apply (track switched).
     fn sync_preview_subs(&mut self) {
         match &self.cues {
-            Some(loader) if loader.dirty && !loader.cues.is_empty() => {
+            Some(loader) if loader.dirty => {
                 let path = std::env::temp_dir()
                     .join(format!("weebshot-{}-preview.subs.ass", std::process::id()));
                 if loader.write_to(&path).is_ok() {
@@ -756,7 +755,6 @@ impl App {
         if let Some(loader) = &self.cues
             && loader.dirty
             && !loader.loading()
-            && !loader.cues.is_empty()
             && self.cue_source().is_some_and(|w| w == loader.source)
         {
             let mut data = Vec::new();

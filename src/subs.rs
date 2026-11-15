@@ -2,6 +2,7 @@
 //! ones back out as ASS so the preview/export can burn them in with the original fonts,
 //! colors and positioning intact for every line that wasn't touched.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -16,6 +17,9 @@ use crate::log;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cue {
+    /// Stable event identity, independent of timeline sorting and deletion.
+    id: usize,
+    text_edited: bool,
     pub start: f64,
     pub end: f64,
     /// Plain display text, shown in the timeline and the inline editor.
@@ -45,13 +49,23 @@ const FALLBACK_HEADER: &str = "[Script Info]\nScriptType: v4.00+\n\n\
     Style: Default,Arial,36,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n\
     [Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
 
+/// Original event order is separate from the sorted, deduplicated timeline.
+#[derive(Default)]
+struct AssDocument {
+    header: String,
+    events: Vec<AssEvent>,
+}
+
+enum AssEvent {
+    Passthrough(String),
+    Dialogue { line: String, original: Cue },
+}
+
 pub struct CueLoader {
     pub source: CueSource,
-    rx: Option<Receiver<(String, Vec<Cue>)>>,
+    rx: Option<Receiver<(AssDocument, Vec<Cue>)>>,
     pub cues: Vec<Cue>,
-    /// Everything up to and including the `[Events]` `Format:` line of the source ASS,
-    /// reused verbatim so a rewritten file keeps the original fonts/styles.
-    header: String,
+    document: AssDocument,
     /// Set once the user deletes/edits/retimes a cue. While dirty, the preview and export
     /// show these cues directly instead of the original file's native subtitle rendering,
     /// since there's no way to patch just one line of it in place.
@@ -63,24 +77,24 @@ impl CueLoader {
         let (tx, rx) = bounded(1);
         let src = source.clone();
         thread::spawn(move || {
-            let (header, cues) = match extract(&ffmpeg, &src) {
-                Ok((header, cues)) => {
+            let (document, cues) = match extract(&ffmpeg, &src) {
+                Ok((document, cues)) => {
                     log::info("subs", format!("loaded {} subtitle cues", cues.len()));
-                    (header, cues)
+                    (document, cues)
                 }
                 Err(e) => {
                     log::warn("subs", format!("could not read subtitle cues: {e}"));
-                    (String::new(), Vec::new())
+                    (AssDocument::default(), Vec::new())
                 }
             };
-            let _ = tx.send((header, cues));
+            let _ = tx.send((document, cues));
             ctx.request_repaint();
         });
         Self {
             source,
             rx: Some(rx),
             cues: Vec::new(),
-            header: String::new(),
+            document: AssDocument::default(),
             dirty: false,
         }
     }
@@ -91,9 +105,9 @@ impl CueLoader {
 
     pub fn poll(&mut self) {
         if let Some(rx) = &self.rx
-            && let Ok((header, cues)) = rx.try_recv()
+            && let Ok((document, cues)) = rx.try_recv()
         {
-            self.header = header;
+            self.document = document;
             self.cues = cues;
             self.rx = None;
         }
@@ -113,6 +127,7 @@ impl CueLoader {
 
     pub fn set_text(&mut self, idx: usize, text: String) {
         if let Some(c) = self.cues.get_mut(idx) {
+            c.text_edited = true;
             c.raw_text = text.clone();
             c.text = text;
             self.dirty = true;
@@ -134,28 +149,50 @@ impl CueLoader {
     }
 
     pub fn write_ass(&self, mut f: impl Write) -> io::Result<()> {
-        let header = if self.header.is_empty() {
+        let header = if self.document.header.is_empty() {
             FALLBACK_HEADER
         } else {
-            &self.header
+            &self.document.header
         };
         f.write_all(header.as_bytes())?;
+        let mut cues = vec![None; self.document.events.len()];
         for cue in &self.cues {
-            writeln!(
-                f,
-                "Dialogue: {},{},{},{},{}",
-                cue.layer,
-                fmt_ass_time(cue.start),
-                fmt_ass_time(cue.end),
-                cue.middle,
-                cue.raw_text
-            )?;
+            cues[cue.id] = Some(cue);
+        }
+        for event in &self.document.events {
+            match event {
+                AssEvent::Passthrough(line) => writeln!(f, "{line}")?,
+                AssEvent::Dialogue { line, original } => {
+                    // All duplicate effect layers share the visible cue's identity.
+                    // Removing that cue removes its layers too, without touching signs.
+                    let Some(cue) = cues[original.id] else {
+                        continue;
+                    };
+                    if cue.start == original.start && cue.end == original.end && !cue.text_edited {
+                        writeln!(f, "{line}")?;
+                    } else {
+                        writeln!(
+                            f,
+                            "Dialogue:{},{},{},{},{}",
+                            original.layer,
+                            fmt_ass_time(cue.start),
+                            fmt_ass_time(cue.end),
+                            original.middle,
+                            if cue.text_edited {
+                                &cue.raw_text
+                            } else {
+                                &original.raw_text
+                            }
+                        )?;
+                    }
+                }
+            }
         }
         Ok(())
     }
 }
 
-fn extract(ffmpeg: &Path, src: &CueSource) -> Result<(String, Vec<Cue>), String> {
+fn extract(ffmpeg: &Path, src: &CueSource) -> Result<(AssDocument, Vec<Cue>), String> {
     let map = match src.ff_index {
         Some(i) => format!("0:{i}"),
         None => "0:s:0".into(),
@@ -231,149 +268,186 @@ fn strip_ass(text: &str) -> String {
         .join(" ")
 }
 
-/// Parse an ffmpeg-produced ASS script into its header (everything up to and including
-/// the `[Events]` `Format:` line — script info and style definitions, reused verbatim to
-/// rewrite the file later) and its `Dialogue:` lines as `Cue`s. Drawings (`\p1`) and empty
-/// lines (typesetting) are skipped, and duplicates (same timing/text on several layers)
-/// collapsed.
-fn parse_ass(ass: &str) -> (String, Vec<Cue>) {
-    let mut header = String::new();
+/// Keep every source event in file order, exposing only visible, deduplicated cues
+/// to the timeline. Hidden typesetting and other source lines pass through verbatim.
+fn parse_ass(ass: &str) -> (AssDocument, Vec<Cue>) {
+    let mut document = AssDocument::default();
     let mut started = false;
     let mut cues: Vec<Cue> = Vec::new();
+    let mut identities = HashMap::new();
     for line in ass.lines() {
         let Some(rest) = line.strip_prefix("Dialogue:") else {
             if !started {
-                header.push_str(line);
-                header.push('\n');
+                document.header.push_str(line);
+                document.header.push('\n');
+            } else {
+                document.events.push(AssEvent::Passthrough(line.into()));
             }
             continue;
         };
         started = true;
         let fields: Vec<&str> = rest.splitn(10, ',').collect();
-        if fields.len() < 10 {
-            continue;
+        let parsed = (|| {
+            if fields.len() < 10 {
+                return None;
+            }
+            let raw = fields[9];
+            if raw.contains("\\p1") || raw.contains("\\p2") || raw.contains("\\p4") {
+                return None;
+            }
+            let text = strip_ass(raw);
+            if text.is_empty() {
+                return None;
+            }
+            Some(Cue {
+                id: document.events.len(),
+                text_edited: false,
+                start: parse_ass_time(fields[1])?,
+                end: parse_ass_time(fields[2])?,
+                text,
+                layer: fields[0].to_string(),
+                middle: fields[3..9].join(","),
+                raw_text: raw.to_string(),
+            })
+        })();
+        if let Some(mut cue) = parsed {
+            let key = (cue.start.to_bits(), cue.end.to_bits(), cue.text.clone());
+            if let Some(&id) = identities.get(&key) {
+                cue.id = id;
+            } else {
+                identities.insert(key, cue.id);
+                cues.push(cue.clone());
+            }
+            document.events.push(AssEvent::Dialogue {
+                line: line.into(),
+                original: cue,
+            });
+        } else {
+            document.events.push(AssEvent::Passthrough(line.into()));
         }
-        let raw = fields[9];
-        if raw.contains("\\p1") || raw.contains("\\p2") || raw.contains("\\p4") {
-            continue;
-        }
-        let text = strip_ass(raw);
-        if text.is_empty() {
-            continue;
-        }
-        let (Some(start), Some(end)) = (parse_ass_time(fields[1]), parse_ass_time(fields[2]))
-        else {
-            continue;
-        };
-        cues.push(Cue {
-            start,
-            end,
-            text,
-            layer: fields[0].to_string(),
-            middle: fields[3..9].join(","),
-            raw_text: raw.to_string(),
-        });
     }
     cues.sort_by(|a, b| a.start.total_cmp(&b.start));
-    // Collapse by timing+text, not full equality: duplicate layers (e.g. an outline
-    // effect) now carry distinct `layer`/`middle` fields but should still count as
-    // one line in the timeline.
-    cues.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.text == b.text);
-    (header, cues)
+    (document, cues)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_dialogue() {
-        let ass = "[Events]\n\
-            Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
-            Dialogue: 0,0:00:22.00,0:00:25.00,Default,,0,0,0,,{\\i1}Second,{\\i0} line\\Nhere\n\
-            Dialogue: 0,0:00:20.00,0:00:22.00,Default,,0,0,0,,First\n\
-            Dialogue: 1,0:00:20.00,0:00:22.00,Default,,0,0,0,,First\n\
-            Dialogue: 0,0:00:01.00,0:00:02.00,Sign,,0,0,0,,{\\p1}m 0 0 l 10 0 10 10\n";
-        let (header, cues) = parse_ass(ass);
-        assert!(header.contains("[Events]"));
-        assert!(header.contains("Format:"));
-        assert_eq!(cues.len(), 2);
-        assert_eq!(cues[0].text, "First");
-        assert_eq!(cues[0].start, 20.0);
-        assert_eq!(cues[1].text, "Second, line here");
-        assert_eq!(cues[1].end, 25.0);
-    }
-
-    #[test]
-    fn loader_mutations() {
-        let mut loader = CueLoader {
+    fn loader(ass: &str) -> CueLoader {
+        let (document, cues) = parse_ass(ass);
+        CueLoader {
             source: CueSource {
                 file: PathBuf::new(),
                 ff_index: None,
             },
             rx: None,
-            header: String::new(),
-            cues: vec![
-                Cue {
-                    start: 1.0,
-                    end: 2.0,
-                    text: "a".into(),
-                    layer: "0".into(),
-                    middle: "Default,,0,0,0,".into(),
-                    raw_text: "a".into(),
-                },
-                Cue {
-                    start: 3.0,
-                    end: 4.0,
-                    text: "b".into(),
-                    layer: "0".into(),
-                    middle: "Default,,0,0,0,".into(),
-                    raw_text: "b".into(),
-                },
-            ],
+            document,
+            cues,
             dirty: false,
-        };
-        loader.set_text(0, "edited".into());
-        assert_eq!(loader.cues[0].text, "edited");
-        assert_eq!(loader.cues[0].raw_text, "edited");
-        assert!(loader.dirty);
-        loader.retime(1, 3.5, 4.5);
-        assert_eq!((loader.cues[1].start, loader.cues[1].end), (3.5, 4.5));
-        loader.delete(0);
-        assert_eq!(loader.cues.len(), 1);
-        assert_eq!(loader.cues[0].text, "b");
+        }
+    }
+
+    fn output(loader: &CueLoader) -> String {
+        let mut out = Vec::new();
+        loader.write_ass(&mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    // Deliberately unsorted, with same-time lines whose source order matters for
+    // collision stacking, nonadjacent duplicate layers, and hidden typesetting.
+    const ASS: &str = concat!(
+        "[Script Info]\nTitle: test\n\n[Events]\n",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+        "Dialogue: 0,0:00:22.00,0:00:25.00,Default,Speaker,40,0,120,,{\\i1}Second,{\\i0} line\\Nhere\n",
+        "Dialogue: 0,0:00:20.00,0:00:22.00,Default,,0,0,0,,First\n",
+        "Dialogue: 0,0:00:20.00,0:00:22.00,Default,,0,0,0,,Other\n",
+        "Dialogue: 1,0:00:20.00,0:00:22.00,Outline,,1,2,3,,{\\bord4}First\n",
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Sign,,0,0,0,,{\\p1}m 0 0 l 10 0 10 10\n",
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Sign,,0,0,0,,{\\pos(1,2)}\n",
+        "Comment: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Keep this comment\n",
+    );
+
+    #[test]
+    fn parses_visible_dialogue_without_losing_source() {
+        let loader = loader(ASS);
+        assert_eq!(loader.cues.len(), 3);
+        assert_eq!(loader.cues[0].text, "First");
+        assert_eq!(loader.cues[0].start, 20.0);
+        assert_eq!(loader.cues[1].text, "Other");
+        assert_eq!(loader.cues[2].text, "Second, line here");
+        assert_eq!(loader.cues[2].end, 25.0);
+        assert_eq!(output(&loader), ASS);
     }
 
     #[test]
-    fn writes_ass_reusing_header() {
-        let loader = CueLoader {
-            source: CueSource {
-                file: PathBuf::new(),
-                ff_index: None,
-            },
-            rx: None,
-            header: "[Script Info]\nTitle: test\n\n[Events]\n\
-                Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-                .to_string(),
-            cues: vec![Cue {
-                start: 1.0,
-                end: 2.5,
-                text: "Hello".into(),
-                layer: "0".into(),
-                middle: "Default,Speaker,40,0,120,".into(),
-                raw_text: "{\\i1}Hello".into(),
-            }],
-            dirty: true,
-        };
-        let path = std::env::temp_dir().join("weebshot-subs-test.ass");
-        loader.write_to(&path).unwrap();
-        let out = std::fs::read_to_string(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-        assert!(out.starts_with("[Script Info]\nTitle: test\n"));
-        assert!(
-            out.contains(
-                "Dialogue: 0,0:00:01.00,0:00:02.50,Default,Speaker,40,0,120,,{\\i1}Hello\n"
-            )
+    fn editing_one_cue_preserves_all_other_events_and_order() {
+        let mut loader = loader(ASS);
+        loader.set_text(2, "Edited".into());
+        assert!(loader.dirty);
+        assert_eq!(
+            output(&loader),
+            ASS.replace("{\\i1}Second,{\\i0} line\\Nhere", "Edited")
         );
+    }
+
+    #[test]
+    fn retiming_preserves_overrides_and_updates_duplicate_layers() {
+        let mut loader = loader(ASS);
+        loader.retime(0, 30.5, 32.5);
+        let expected = ASS
+            .lines()
+            .map(|line| {
+                if line.ends_with("First") {
+                    line.replace("0:00:20.00,0:00:22.00", "0:00:30.50,0:00:32.50")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        assert_eq!(output(&loader), expected);
+    }
+
+    #[test]
+    fn editing_and_deleting_a_cue_apply_to_its_duplicate_layers() {
+        let mut loader = loader(ASS);
+        loader.set_text(0, "Changed".into());
+        let out = output(&loader);
+        assert!(!out.contains("First"));
+        assert_eq!(out.matches(",Changed\n").count(), 2);
+        assert!(out.contains("Outline,,1,2,3,,Changed"));
+        loader.delete(0);
+        let expected = ASS
+            .lines()
+            .filter(|line| !line.ends_with("First"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        assert_eq!(output(&loader), expected);
+        assert_eq!(loader.cues[0].text, "Other");
+    }
+
+    #[test]
+    fn deleting_every_visible_cue_keeps_hidden_events() {
+        let mut loader = loader(ASS);
+        while !loader.cues.is_empty() {
+            loader.delete(0);
+        }
+        let out = output(&loader);
+        assert!(out.starts_with("[Script Info]\nTitle: test\n"));
+        assert!(out.contains("{\\p1}m 0 0 l 10 0 10 10"));
+        assert!(out.contains("{\\pos(1,2)}"));
+        assert!(out.contains("Keep this comment"));
+        assert!(!out.contains("First"));
+        assert!(!out.contains("Second"));
+        assert!(!out.contains(",Other\n"));
+    }
+
+    #[test]
+    fn malformed_and_nonstandard_dialogue_passes_through() {
+        let ass = "[Events]\nDialogue: malformed\nDialogue: 0,bad,time,Default,,0,0,0,,Text\n";
+        assert_eq!(output(&loader(ass)), ass);
     }
 }

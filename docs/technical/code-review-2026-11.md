@@ -14,7 +14,7 @@ settings UI, the keymap, and the native Anime4K helper.
 
 ## Bugs
 
-Ordered roughly by impact. The first two silently change export output.
+Ordered roughly by impact. The first two change export output.
 
 ### 1. Cropped exports get upscaled
 
@@ -30,29 +30,13 @@ The Anime4K branch already uses the crop height. Fix: use
 `self.crop.map(|c| c.height).or(self.src_height)` in both branches, and extend the
 `no_upscale` test with a crop.
 
-### 2. Editing one subtitle line drops signs and layered duplicates
+### 2. Editing multiline subtitles flattens line breaks
 
-[`src/subs.rs:257-281`](../../src/subs.rs), written back at `:143`
+[`src/subs.rs`](../../src/subs.rs)
 
-`parse_ass` discards three kinds of `Dialogue:` lines, because the timeline should not
-show them:
-
-- drawings (`\p1`, `\p2`, `\p4`),
-- lines whose visible text is empty (typesetting),
-- lines with the same timing and text on another layer (outline effects), via `dedup_by`.
-
-`write_ass` writes only the cues that survived. Once any cue is edited, retimed or
-deleted, the preview and the burn-in switch to that rewritten file, so every vector sign
-and every duplicate layer disappears from the whole episode. The module comment promises
-the opposite for untouched lines.
-
-Fix: keep the skipped lines verbatim (for example as hidden passthrough entries) and write
-them back out. Sorting by start time also changes the file order of same-time lines, which
-libass uses for collision stacking; preserving the original order avoids that.
-
-Related: the inline editor works on the stripped display text, where `\N` has become a
+The inline editor works on the stripped display text, where `\N` has become a
 space. Editing a two-line cue flattens it to one line, in addition to the documented loss
-of override tags.
+of override tags on edited lines.
 
 ### 3. Timecode display and parsing disagree at 23.976 fps
 
@@ -236,7 +220,7 @@ sub-visibility toggle must be restored when that reply arrives rather than immed
 
 ## Suggested order
 
-1. Bugs 1 and 2, because they change what ends up in an exported file without any warning.
+1. Bug 1, because it silently changes the resolution of exported files.
 2. Bugs 5, 6 and 8, which are small, contained fixes.
 3. Optimization 1, then 2.
 4. The rest as time allows; bug 9 needs a Windows machine.
