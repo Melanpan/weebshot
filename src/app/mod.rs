@@ -335,6 +335,8 @@ impl App {
                 self.thumbs = None;
                 self.waveform = None;
                 self.timeline = timeline::TimelineState::default();
+                // The preview zoom and pan framed the previous video.
+                self.reset_view_zoom();
                 self.settings.push_recent(path.to_path_buf());
             }
             Err(e) => self.error(format!("{e:#}")),
@@ -1560,8 +1562,11 @@ impl eframe::App for App {
         egui::Panel::bottom("status")
             .frame(panel_frame)
             .show(ui, |ui| self.status_bar(ui));
-        let fitted =
-            timeline::fitted_height(self.settings.show_audio_lane, self.settings.show_sub_lane);
+        let fitted = timeline::fitted_height(
+            self.settings.show_audio_lane,
+            self.settings.show_sub_lane,
+            self.timeline.sub_rows(),
+        );
         egui::Panel::bottom("timeline")
             .resizable(true)
             .default_size(fitted)

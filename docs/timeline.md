@@ -11,8 +11,9 @@
   beat hits. It's read in the background after opening a file (and again when you switch audio
   tracks); turn it off with the *Audio* checkbox above the timeline.
 - **S1** — one block per subtitle line of the selected subtitle track. Hover a block to read it.
-  Signs and typesetting without readable text are left out. Lines can be edited, deleted and
-  retimed — see *Editing subtitles* below.
+  Signs and typesetting without readable text are left out. When lines are on screen at the
+  same time (dialogue over a sign, two speakers), a second row, **S2**, appears so they don't
+  cover each other. Lines can be edited, deleted and retimed — see *Editing subtitles* below.
   (Turn the lane off with the *Subtitles* checkbox above the timeline if you don't need it.)
 
 The **red line** is the playhead. The **yellow** band and flags (`I` / `O`) are the clip range.

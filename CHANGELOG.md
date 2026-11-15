@@ -18,6 +18,10 @@
 
 ### Fixed
 
+- **Subtitle lines shown at the same time** no longer cover each other in the timeline: a
+  second row (S2) appears when a track has overlapping lines.
+- **Opening another video resets the preview zoom**, so it no longer starts zoomed and panned
+  to where the previous one was.
 - **Auto Stitch fails faster** on footage it cannot stitch: analysis frames are decoded once
   and shared between attempts.
 - **Auto Stitch right after opening a clip** no longer reports "No camera movement detected"

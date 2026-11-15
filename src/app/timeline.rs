@@ -20,12 +20,42 @@ const AUDIO_H: f32 = 36.0;
 const HEADER_H: f32 = 34.0;
 
 /// Panel height that fits the visible lanes exactly, with no empty space below them.
-pub fn fitted_height(show_audio: bool, show_subs: bool) -> f32 {
+pub fn fitted_height(show_audio: bool, show_subs: bool, sub_rows: usize) -> f32 {
     HEADER_H
         + RULER_H
         + VIDEO_H
         + if show_audio { AUDIO_H } else { 0.0 }
-        + if show_subs { SUBS_H } else { 0.0 }
+        + if show_subs {
+            SUBS_H * sub_rows as f32
+        } else {
+            0.0
+        }
+}
+
+/// Subtitle lane row (0 or 1) for each `(start, end)` span, so lines on screen at the
+/// same time (dialogue over a sign, two speakers) sit side by side in two rows instead
+/// of on top of each other. A line goes to the first row unless that is still occupied.
+/// With three or more at once, it shares the row that frees up first.
+fn cue_rows(spans: impl Iterator<Item = (f64, f64)>) -> Vec<u8> {
+    let spans: Vec<(f64, f64)> = spans.collect();
+    // Retimed cues are not re-sorted, so don't rely on the slice order.
+    let mut order: Vec<usize> = (0..spans.len()).collect();
+    order.sort_by(|&a, &b| spans[a].0.total_cmp(&spans[b].0));
+    let mut rows = vec![0u8; spans.len()];
+    let mut busy_until = [f64::NEG_INFINITY; 2];
+    for i in order {
+        let (start, end) = spans[i];
+        let row = if start >= busy_until[0] {
+            0
+        } else if start >= busy_until[1] || busy_until[1] < busy_until[0] {
+            1
+        } else {
+            0
+        };
+        busy_until[row] = busy_until[row].max(end);
+        rows[i] = row as u8;
+    }
+    rows
 }
 /// Smallest visible span (seconds).
 const MIN_SPAN: f64 = 0.4;
@@ -79,6 +109,8 @@ pub struct TimelineState {
     /// independent of the playhead, so playback moving past it doesn't change what
     /// `Action::DeleteSubtitleLine` would act on.
     pub selected_cue: Option<usize>,
+    /// Rows the subtitle lane needed last frame (2 when lines overlap in time).
+    sub_rows: usize,
 }
 
 impl Default for TimelineState {
@@ -94,11 +126,17 @@ impl Default for TimelineState {
             last_time: 0.0,
             editing_cue: None,
             selected_cue: None,
+            sub_rows: 1,
         }
     }
 }
 
 impl TimelineState {
+    /// Rows the subtitle lane currently uses.
+    pub fn sub_rows(&self) -> usize {
+        self.sub_rows
+    }
+
     pub fn fit(&mut self) {
         self.view_len = None;
         self.view_start = 0.0;
@@ -456,7 +494,16 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
     let mut events = Vec::new();
     let p = d.p;
     let audio_h = if d.show_audio_lane { AUDIO_H } else { 0.0 };
-    let lanes_h = RULER_H + VIDEO_H + audio_h + if d.show_sub_lane { SUBS_H } else { 0.0 };
+    // Rows come from the whole track, not the visible part, so the lane doesn't change
+    // height while scrolling.
+    let cue_row = d
+        .cues
+        .filter(|_| d.show_sub_lane)
+        .map(|cues| cue_rows(cues.iter().map(|c| (c.start, c.end))))
+        .unwrap_or_default();
+    st.sub_rows = if cue_row.contains(&1) { 2 } else { 1 };
+    let subs_h = SUBS_H * st.sub_rows as f32;
+    let lanes_h = RULER_H + VIDEO_H + audio_h + if d.show_sub_lane { subs_h } else { 0.0 };
     let size = vec2(
         ui.available_width(),
         ui.available_height().max(lanes_h + 4.0),
@@ -500,8 +547,12 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
     );
     let subs = Rect::from_min_size(
         pos2(track.left(), audio.bottom()),
-        vec2(track.width(), SUBS_H),
+        vec2(track.width(), subs_h),
     );
+    let sub_row = |row: u8| {
+        let top = subs.top() + SUBS_H * f32::from(row);
+        top..=top + SUBS_H
+    };
     let content_bottom = if d.show_sub_lane {
         subs.bottom()
     } else {
@@ -531,8 +582,11 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
         waveform_lane(&painter, d, audio, &x_of, &t_of, px_per_sec);
     }
     if d.show_sub_lane {
-        label(subs.center().y, "S1");
-        painter.hline(track.x_range(), subs.top(), Stroke::new(1.0, p.bg1));
+        for row in 0..st.sub_rows as u8 {
+            let y = sub_row(row);
+            label((y.start() + y.end()) / 2.0, &format!("S{}", row + 1));
+            painter.hline(track.x_range(), *y.start(), Stroke::new(1.0, p.bg1));
+        }
     }
 
     // Ruler ticks
@@ -627,9 +681,11 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
                     .enumerate()
                     .filter(|(_, c)| c.end >= vs && c.start <= vs + span)
                 {
-                    let mut r =
-                        Rect::from_x_y_ranges(x_of(cue.start)..=x_of(cue.end), subs.y_range())
-                            .shrink2(vec2(0.0, 3.0));
+                    let mut r = Rect::from_x_y_ranges(
+                        x_of(cue.start)..=x_of(cue.end),
+                        sub_row(cue_row[idx]),
+                    )
+                    .shrink2(vec2(0.0, 3.0));
                     if r.width() < 2.0 {
                         r = r.expand2(vec2(1.0, 0.0));
                     }
@@ -1254,6 +1310,23 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlapping_cues_use_a_second_row() {
+        // Back-to-back lines stay on one row.
+        assert_eq!(cue_rows([(0.0, 2.0), (2.0, 4.0)].into_iter()), [0, 0]);
+        // A sign held under three dialogue lines: the dialogue moves to row two and
+        // comes back once the sign is gone.
+        let spans = [(0.0, 10.0), (1.0, 3.0), (3.0, 5.0), (10.0, 12.0)];
+        assert_eq!(cue_rows(spans.into_iter()), [0, 1, 1, 0]);
+        // Three at once: the third shares the row that frees up first.
+        assert_eq!(
+            cue_rows([(0.0, 10.0), (1.0, 4.0), (2.0, 5.0)].into_iter()),
+            [0, 1, 1]
+        );
+        // Order in the slice doesn't matter (a retimed cue isn't re-sorted).
+        assert_eq!(cue_rows([(5.0, 8.0), (0.0, 6.0)].into_iter()), [1, 0]);
+    }
 
     #[test]
     fn ruler_steps() {
