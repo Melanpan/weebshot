@@ -297,7 +297,6 @@ fn windows_script(pid: u32) -> String {
     format!(
         "@echo off\r\n\
          setlocal DisableDelayedExpansion\r\n\
-         chcp 65001 >nul\r\n\
          :wait\r\n\
          tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (ping -n 2 127.0.0.1 >nul & goto wait)\r\n\
          robocopy \"{from}\" \"{to}\" /E /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul\r\n\
@@ -377,7 +376,6 @@ mod tests {
         let restart = r#"start "" "%WEEBSHOT_UPDATE_TO%\weebshot.exe""#;
         let cleanup = r#"rmdir /S /Q "%WEEBSHOT_UPDATE_WORK%""#;
         assert!(s.contains("PID eq 1234"));
-        assert!(s.find("chcp 65001").unwrap() < s.find(":wait").unwrap());
         let failure = s.find("if errorlevel 8 (").unwrap();
         assert!(s.find(copy).unwrap() < failure);
         assert!(failure < s.find("exit /b 1").unwrap());
@@ -469,7 +467,9 @@ public class Payload {
             let script = work.path.join("apply-update.cmd");
             std::fs::write(
                 &script,
-                windows_script(parent.id()).replace(" /NP >nul", " /NP"),
+                windows_script(parent.id())
+                    .replace("@echo off", "@echo on")
+                    .replace(" /NP >nul", " /NP"),
             )
             .unwrap();
             let marker = fixture.join(if locked { "failure.txt" } else { "restart.txt" });
