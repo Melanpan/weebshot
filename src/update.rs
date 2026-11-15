@@ -303,10 +303,10 @@ fn windows_script(pid: u32) -> String {
          if errorlevel 8 (\r\n\
          powershell.exe -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Weebshot could not copy the update. Please download and install it manually.', 'Weebshot update failed') | Out-Null\"\r\n\
          rmdir /S /Q \"{work}\"\r\n\
-         exit /b 1\r\n\
+         exit 1\r\n\
          )\r\n\
          start \"\" \"{exe}\"\r\n\
-         rmdir /S /Q \"{work}\" & exit /b 0\r\n",
+         rmdir /S /Q \"{work}\" & exit 0\r\n",
         work = "%WEEBSHOT_UPDATE_WORK%",
         from = r"%WEEBSHOT_UPDATE_WORK%\files",
         to = "%WEEBSHOT_UPDATE_TO%",
@@ -378,16 +378,17 @@ mod tests {
         assert!(s.contains("PID eq 1234"));
         let failure = s.find("if errorlevel 8 (").unwrap();
         assert!(s.find(copy).unwrap() < failure);
-        assert!(failure < s.find("exit /b 1").unwrap());
-        assert!(s.find("exit /b 1").unwrap() < s.find(restart).unwrap());
+        assert!(failure < s.find("exit 1").unwrap());
+        assert!(s.find("exit 1").unwrap() < s.find(restart).unwrap());
         let copy_at = s.find(copy).unwrap();
         let restart_at = s.find(restart).unwrap();
         let cleanup_at = s.rfind(cleanup).unwrap();
         assert!(s.find(":wait").unwrap() < copy_at);
         assert!(copy_at < restart_at && restart_at < cleanup_at);
         // Parse the explicit successful exit before deleting the batch file.
-        // Robocopy returns 1 for a successful copy, which must not leak out.
-        assert!(s.ends_with(&format!("{cleanup} & exit /b 0\r\n")));
+        // Exit the dedicated cmd process, without returning through the deleted
+        // batch file. Robocopy also returns 1 for a successful copy.
+        assert!(s.ends_with(&format!("{cleanup} & exit 0\r\n")));
     }
 
     #[cfg(windows)]
@@ -509,7 +510,7 @@ public class Payload {
                 status.success(),
                 !locked,
                 "locked={locked}: {}",
-                std::fs::read_to_string(&log).unwrap()
+                String::from_utf8_lossy(&std::fs::read(&log).unwrap())
             );
             assert!(!work.path.exists(), "helper left its workspace behind");
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -555,8 +556,9 @@ public class Payload {
             .output()
             .unwrap();
         assert!(
-            !path.exists(),
-            "helper did not clean up: {}",
+            !path.exists() && output.status.success(),
+            "helper did not cleanly exit after cleanup ({}): {}",
+            output.status,
             String::from_utf8_lossy(&output.stderr)
         );
     }
