@@ -33,6 +33,9 @@
 - **Save PSD…** accepts about thirty full-HD frames (64 megapixels of layers), up from about
   thirteen. A ten-frame rotated stitch was already too large for the old limit.
 
+- **Turning MCP integration off and on again** could be refused with "Another Weebshot GUI owns
+  the MCP bridge" if an export or stitch was launching FFmpeg at that moment. The bridge now
+  releases its ownership lock explicitly.
 - **Dragging the playhead inside an In/Out selection** now scrubs. Before, grabbing it in the
   ruler moved the whole selection.
 - **Linux on Wayland**: dropping files from a file manager now opens them, and Options/Help

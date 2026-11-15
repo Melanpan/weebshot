@@ -160,13 +160,27 @@ fn ipc_connect_disconnect_permissions_and_shutdown() {
     );
 }
 
+/// Leave a socket path behind the way a killed GUI does. Dropping the
+/// listener closes it for this thread, but a process being spawned by another
+/// test holds a copy until it executes, which a genuinely dead process cannot.
+/// Wait until nothing answers on the path.
+#[cfg(unix)]
+fn abandon(listener: std::os::unix::net::UnixListener, path: &std::path::Path) {
+    drop(listener);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::os::unix::net::UnixStream::connect(path).is_ok() {
+        assert!(std::time::Instant::now() < deadline, "listener still alive");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn ipc_recovers_abandoned_socket_and_preserves_live_legacy_listener() {
     use std::os::unix::{fs::MetadataExt, net::UnixListener};
     let scratch = crate::export::Scratch::new(&std::env::temp_dir(), 999_111).unwrap();
     let path = scratch.path.join("gui.sock");
-    drop(UnixListener::bind(&path).unwrap()); // Same residue as a killed GUI.
+    abandon(UnixListener::bind(&path).unwrap(), &path);
     let bridge = ipc::Bridge::start(path.clone(), eframe::egui::Context::default()).unwrap();
     assert!(std::os::unix::net::UnixStream::connect(&path).is_ok());
     drop(bridge);
@@ -192,7 +206,7 @@ fn ipc_serializes_concurrent_owners_and_preserves_replaced_paths_on_drop() {
     };
     let scratch = crate::export::Scratch::new(&std::env::temp_dir(), 999_112).unwrap();
     let path = scratch.path.join("gui.sock");
-    drop(UnixListener::bind(&path).unwrap());
+    abandon(UnixListener::bind(&path).unwrap(), &path);
     let barrier = Arc::new(Barrier::new(8));
     let callers = (0..8)
         .map(|_| {
@@ -220,11 +234,44 @@ fn ipc_serializes_concurrent_owners_and_preserves_replaced_paths_on_drop() {
         replaced_inode
     );
     assert!(std::os::unix::net::UnixStream::connect(&path).is_ok());
-    drop(replacement);
+    abandon(replacement, &path);
     // The OS releases the advisory lock; the persistent lock file is reusable.
     drop(ipc::Bridge::start(path.clone(), eframe::egui::Context::default()).unwrap());
     assert!(!path.exists());
     assert!(scratch.path.join("gui.sock.lock").exists());
+}
+
+/// A process being spawned on another thread holds a copy of every open file
+/// until it executes, including the ownership lock. Closing the lock alone
+/// would leave it held for that moment and refuse the next owner.
+#[cfg(unix)]
+#[test]
+fn ipc_releases_ownership_while_other_threads_spawn_processes() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let scratch = crate::export::Scratch::new(&std::env::temp_dir(), 999_115).unwrap();
+    let path = scratch.path.join("gui.sock");
+    let stop = Arc::new(AtomicBool::new(false));
+    let spawners = (0..4)
+        .map(|_| {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = std::process::Command::new("true").status();
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let refused = (0..300)
+        .filter(|_| ipc::Bridge::start(path.clone(), eframe::egui::Context::default()).is_err())
+        .count();
+    stop.store(true, Ordering::Relaxed);
+    for spawner in spawners {
+        spawner.join().unwrap();
+    }
+    assert_eq!(refused, 0, "the previous owner's lock outlived it");
 }
 
 #[cfg(target_os = "linux")]

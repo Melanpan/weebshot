@@ -79,7 +79,7 @@ mod platform {
     // Keep this advisory lock for the entire bridge lifetime. The lock file is
     // deliberately persistent: unlinking it would let new instances lock a
     // different inode and race an owner still holding the old one.
-    fn ownership_lock(path: &Path) -> Result<File> {
+    fn ownership_lock(path: &Path) -> Result<OwnershipLock> {
         let mut name = path.as_os_str().to_os_string();
         name.push(".lock");
         let lock_path = PathBuf::from(name);
@@ -118,13 +118,24 @@ mod platform {
                 path.display()
             )
         })?;
-        Ok(lock)
+        Ok(OwnershipLock(lock))
+    }
+
+    /// The held advisory lock. Closing the file is not enough to release it:
+    /// a process being spawned on another thread (FFmpeg for an export or a
+    /// stitch) holds a copy of the file until it executes, and the lock lives
+    /// as long as any copy. Unlocking releases it for every copy at once.
+    struct OwnershipLock(File);
+    impl Drop for OwnershipLock {
+        fn drop(&mut self) {
+            let _ = self.0.unlock();
+        }
     }
 
     struct SocketLease {
         path: PathBuf,
         identity: (u64, u64),
-        _lock: File,
+        _lock: OwnershipLock,
     }
     impl Drop for SocketLease {
         fn drop(&mut self) {
@@ -134,6 +145,7 @@ mod platform {
             {
                 let _ = std::fs::remove_file(&self.path);
             }
+            // The ownership lock is released after this, when the field drops.
         }
     }
 
