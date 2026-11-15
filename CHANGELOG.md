@@ -2,74 +2,83 @@
 
 ## 0.5.0 — 2026-11-15
 
-### New
+This release adds optional local automation, searchable settings, and more capable Auto
+Stitch, along with fixes for subtitles, playback, exports, and updates.
 
-- **Optional MCP automation and headless operation** for media inspection, screenshots,
-  clips, and stitched PNG/PSD exports. Local clients can prepare selections in the GUI or
-  run without a display. Contact sheets, detailed frame batches, and scene detection help
-  find shots before exporting. Integration starts off; GUI attachment supports Linux and
-  macOS, and headless mode also supports Windows. See [MCP setup](docs/mcp.md).
-- **Searchable settings** with six categories, search that jumps to the matching control,
+### New features
+
+- **MCP automation and headless operation.** Inspect videos, find shots with contact
+  sheets and scene detection, extract screenshots, export clips, and create stitched
+  PNGs or layered PSDs. Clients can prepare a selection in the running editor or work
+  without a display. Integration is **off by default**. GUI attachment supports Linux
+  and macOS; headless mode also supports Windows.
+  [Setup and examples](https://github.com/Melanpan/weebshot/blob/v0.5.0/docs/mcp.md).
+- **Searchable settings.** Six categories, search that jumps to the matching control,
   copyable commands and paths, and confirmations before replacing shortcut assignments.
-- **More stitch methods**: Shift, scale and rotation handles camera roll and zoom;
-  experimental Layered (two planes) separates foreground and background motion.
-- **Force a result** (Stitch tab and Options → Export → Auto Stitch, off by default). When
-  Auto Stitch cannot align the frames reliably, it builds a rough stitch from each frame's
-  best-guess shift instead of failing. The preview is marked **Forced · unverified**; save it
-  as PSD to move and mask the frames by hand. MCP: `force` on `stitch_create`.
+- **More stitch methods.** **Shift, scale and rotation** handles camera roll and zoom;
+  experimental **Layered (two planes)** separates foreground and background motion.
 
-- **Even out lighting between frames** (Advanced, on by default). Shots with a glow, vignette
-  or haze fixed to the screen no longer show faint jagged bands at every seam: each frame's
-  broad colour is matched to the frames before it, while lines and texture keep their source
-  pixels.
-- **Small results are marked** in the preview when a stitch is less than 10% larger than a
-  single frame, and Automatic looks past them for a larger pan in its search window.
+### Better Auto Stitch
 
-### Fixed
+- **More useful automatic selection.** Automatic tries other nearby pans if the closest
+  movement cannot be stitched, and looks past very small results for a larger pan. It
+  also finds movement that starts at the beginning of a newly opened clip.
+- **A usable result from a mixed selection.** If a marked range cannot be stitched whole,
+  Stitch Selection uses the largest pan inside it and shows **Marked range shortened**.
+- **Smoother lighting at seams.** **Even out lighting between frames** is on by default.
+  It matches broad colour differences while retaining source lines and texture, and
+  avoids jagged colour patches when a beam, glow, or haze changes during a pan.
+- **Force a result when alignment fails.** This optional setting builds a rough stitch
+  from best-guess shifts. The preview is clearly marked **Forced · unverified**; export
+  a PSD to adjust the frames and masks by hand. It is off by default, available in the
+  Stitch tab and under **Options → Export → Auto Stitch**, and exposed as `force` in MCP.
+- **Faster failures and clearer feedback.** Analysis frames are decoded once and shared
+  between attempts. Alignment errors explain what failed and suggest what to try next;
+  results less than 10% larger than one frame are marked in the preview.
+- **Larger editable PSDs.** Save PSD accepts up to 64 megapixels of source layers—about
+  thirty full-HD frames, up from about thirteen.
 
-- **Subtitle edits preserve unrelated events**, including hidden, malformed, and duplicate
-  layers. Retiming keeps ASS overrides, and preview files use private, isolated temporary
-  directories that are removed when no longer needed.
-- **Clip height limits no longer enlarge a cropped video** when Anime4K is off.
-- **Media loading reports success only after mpv loads the file**, and failed loads surface
-  their error. Pending seek actions retain their precision and the newest target wins.
-- **Shutdown cancels exports and allows workers time to clean up**; waveform decoding
-  handles partial sample reads, and screenshot frame selection retains fractional timing.
-- **Update downloads and helper scripts use isolated temporary workspaces**. Failed
-  preparations clean up automatically; Windows preserves non-ASCII paths, reports copy failures,
-  and removes its workspace after applying the update.
-- **Auto Stitch no longer leaves jagged patches of colour** where the lighting itself
-  changes during a pan (a coloured beam fading out, moving light rays). Evening out
-  lighting handled only small differences, so a larger one was half corrected and showed
-  along the seam. It is now closed at the seam and released just behind it, and later
-  frames keep their own light.
-- **Subtitle lines shown at the same time** no longer cover each other in the timeline: a
-  second row (S2) appears when a track has overlapping lines.
-- **Opening another video resets the preview zoom**, so it no longer starts zoomed and panned
-  to where the previous one was.
-- **Auto Stitch fails faster** on footage it cannot stitch: analysis frames are decoded once
-  and shared between attempts.
-- **Auto Stitch right after opening a clip** no longer reports "No camera movement detected"
-  when the camera is already moving on the first frame. Discovery now starts from the moving
-  frames it found near the playhead.
-- **Auto Stitch depends less on where the playhead is.** If the movement nearest the playhead
-  is not a stitchable pan, Automatic tries the other pans in its search window, nearest first.
-- **Stitch Selection on a range that cannot be stitched whole** (two movements in different
-  directions, a stretch that will not align) now stitches the largest pan inside it and shows
-  **Marked range shortened**, instead of failing.
-- **Alignment errors say what failed**: how many frames found no match, or matched in
-  position but differ in their outlines, with a suggestion for each case.
-- **Save PSD…** accepts about thirty full-HD frames (64 megapixels of layers), up from about
-  thirteen. A ten-frame rotated stitch was already too large for the old limit.
+### Fixes and reliability
 
-- **Turning MCP integration off and on again** could be refused with "Another Weebshot GUI owns
-  the MCP bridge" if an export or stitch was launching FFmpeg at that moment. The bridge now
-  releases its ownership lock explicitly.
-- **Dragging the playhead inside an In/Out selection** now scrubs. Before, grabbing it in the
-  ruler moved the whole selection.
-- **Linux on Wayland**: dropping files from a file manager now opens them, and Options/Help
-  windows open in front of the editor. Weebshot now runs through XWayland when it's available;
-  set `WEEBSHOT_WAYLAND=1` to use native Wayland (no file drops there).
+- **Subtitle editing preserves other events and layers.** Hidden, malformed, and duplicate
+  events survive edits; retiming keeps ASS overrides. Overlapping subtitle lines appear
+  on a second timeline row instead of covering each other. Preview files now use private,
+  isolated temporary directories and are removed when no longer needed.
+- **Playback and seeking.** Opening another video resets preview zoom. Files are reported
+  as loaded only after mpv finishes loading them, and failed loads show an error. The
+  newest seek target wins without losing its requested precision.
+- **Timeline scrubbing.** Dragging the playhead inside an In/Out selection scrubs the video
+  instead of moving the whole selection.
+- **Exports and cleanup.** Clip height limits no longer enlarge cropped video when
+  Anime4K is off. Screenshot frame selection retains fractional timing, waveform decoding
+  handles partial sample reads, and shutdown cancels exports and allows workers time to
+  clean up.
+- **More reliable updates.** Downloads and helper scripts use isolated temporary
+  workspaces. Failed preparations clean up automatically. The Windows helper preserves
+  non-ASCII paths, waits without needing console input, limits copy retries, reports
+  copy failures, and cleans up before exiting with the correct result.
+- **MCP can be disabled and re-enabled during exports.** Its ownership lock is released
+  explicitly, avoiding a false “Another Weebshot GUI owns the MCP bridge” error while
+  FFmpeg is being launched.
+
+### Linux window behaviour
+
+File-manager drops now open videos, and Options/Help windows open in front of the editor.
+Weebshot uses **XWayland when available** to support these actions. Set
+`WEEBSHOT_WAYLAND=1` to opt into native Wayland; file drops remain unavailable there.
+
+### Downloads
+
+| Platform | Package |
+| --- | --- |
+| Windows x64 | [ZIP](https://github.com/Melanpan/weebshot/releases/download/v0.5.0/weebshot-windows-x64.zip) — unzip and run `weebshot.exe` |
+| Linux x86_64 | [AppImage](https://github.com/Melanpan/weebshot/releases/download/v0.5.0/weebshot-x86_64.AppImage) |
+| Fedora x86_64 | [RPM](https://github.com/Melanpan/weebshot/releases/download/v0.5.0/weebshot-x86_64.rpm) — install or upgrade with `sudo dnf install ./weebshot-x86_64.rpm` |
+| macOS Apple Silicon | [ZIP](https://github.com/Melanpan/weebshot/releases/download/v0.5.0/weebshot-macos-arm64.zip) |
+
+The packages include the media tools and Anime4K helper. Windows and AppImage users can
+update through **Help → Check for updates…**; Fedora RPM and macOS users should download
+and install the new package. [Installation and update instructions](https://github.com/Melanpan/weebshot/blob/v0.5.0/docs/install.md).
 
 ## 0.4.0 — 2026-11-11
 
