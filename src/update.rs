@@ -295,7 +295,7 @@ fn windows_script(pid: u32, work: &Path, to: &Path) -> String {
          exit /b 1\r\n\
          )\r\n\
          start \"\" \"{exe}\"\r\n\
-         rmdir /S /Q \"{work}\"\r\n",
+         rmdir /S /Q \"{work}\" & exit /b 0\r\n",
         work = work.display(),
         from = work.join("files").display(),
         to = to.display(),
@@ -381,8 +381,9 @@ mod tests {
         let cleanup_at = s.rfind(&cleanup).unwrap();
         assert!(s.find(":wait").unwrap() < copy_at);
         assert!(copy_at < restart_at && restart_at < cleanup_at);
-        // The self-deleting cleanup must be the last command in the batch file.
-        assert!(s.ends_with(&(cleanup + "\r\n")));
+        // Parse the explicit successful exit before deleting the batch file.
+        // Robocopy returns 1 for a successful copy, which must not leak out.
+        assert!(s.ends_with(&(cleanup + " & exit /b 0\r\n")));
     }
 
     #[cfg(windows)]
@@ -464,6 +465,8 @@ public class Payload {
             let marker = fixture.join(if locked { "failure.txt" } else { "restart.txt" });
             let mut paths = vec![mock_bin.clone()];
             paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+            let log = fixture.join(if locked { "failure.log" } else { "success.log" });
+            let output = std::fs::File::create(&log).unwrap();
             let mut child = Command::new("cmd.exe")
                 .args(["/D", "/C"])
                 .arg(&script)
@@ -471,8 +474,8 @@ public class Payload {
                 .env("PATH", std::env::join_paths(paths).unwrap())
                 .env("WEEBSHOT_UPDATE_TEST_MARKER", &marker)
                 .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(output.try_clone().unwrap())
+                .stderr(output)
                 .spawn()
                 .unwrap();
             thread::sleep(Duration::from_millis(200));
@@ -494,7 +497,12 @@ public class Payload {
                 thread::sleep(Duration::from_millis(50));
             };
             parent.wait().unwrap();
-            assert_eq!(status.success(), !locked);
+            assert_eq!(
+                status.success(),
+                !locked,
+                "locked={locked}: {}",
+                std::fs::read_to_string(&log).unwrap()
+            );
             assert!(!work.path.exists(), "helper left its workspace behind");
             let deadline = Instant::now() + Duration::from_secs(5);
             let expected = if locked { "powershell" } else { "weebshot" };

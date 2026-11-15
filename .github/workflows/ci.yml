@@ -19,6 +19,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Fetch libmpv
         run: ./scripts/fetch-libmpv.ps1
+      - name: Install FFmpeg for media regression tests
+        run: choco install ffmpeg --no-progress -y
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
@@ -32,9 +34,9 @@ jobs:
           # The man-db trigger can stall apt for most of an hour on GitHub's Ubuntu images.
           sudo rm -f /var/lib/man-db/auto-update
           # Avoid the hosted image's Ubuntu DNS failures; APT still verifies Ubuntu signatures.
-          echo 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
-          sudo apt-get -o APT::Update::Error-Mode=any update
-          sudo apt-get install -y --no-install-recommends libmpv-dev ffmpeg libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev libwayland-dev \
+          printf '%s\n' 'https://mirror.math.princeton.edu/pub/ubuntu/' 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::ForceIPv4=true -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::ForceIPv4=true install -y --no-install-recommends libmpv-dev ffmpeg libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev libwayland-dev \
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev xvfb openbox xdotool x11-utils
       - uses: dtolnay/rust-toolchain@stable
         with:

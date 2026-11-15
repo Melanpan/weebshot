@@ -27,9 +27,9 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo rm -f /var/lib/man-db/auto-update
-          echo 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
-          sudo apt-get -o APT::Update::Error-Mode=any update
-          sudo apt-get install -y --no-install-recommends rpm desktop-file-utils
+          printf '%s\n' 'https://mirror.math.princeton.edu/pub/ubuntu/' 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::ForceIPv4=true -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::ForceIPv4=true install -y --no-install-recommends rpm desktop-file-utils
       - name: Download and verify released runtime
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]

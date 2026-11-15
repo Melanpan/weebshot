@@ -49,9 +49,12 @@ jobs:
         run: ./scripts/fetch-libmpv.ps1
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
       - name: Build and package (with ffmpeg + gifsicle)
         run: ./scripts/package.ps1
+      - name: Test with bundled media tools
+        run: |
+          $env:PATH = "$PWD\dist\weebshot;$env:PATH"
+          cargo test --locked
       - name: Test Anime4K with the packaged helper
         run: |
           $env:PATH = "$PWD\dist\weebshot;$env:PATH"
@@ -71,9 +74,9 @@ jobs:
           # The man-db trigger can stall apt for most of an hour on GitHub's Ubuntu images.
           sudo rm -f /var/lib/man-db/auto-update
           # Avoid the hosted image's Ubuntu DNS failures; APT still verifies Ubuntu signatures.
-          echo 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
-          sudo apt-get -o APT::Update::Error-Mode=any update
-          sudo apt-get install -y --no-install-recommends libmpv-dev ffmpeg gifsicle libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev \
+          printf '%s\n' 'https://mirror.math.princeton.edu/pub/ubuntu/' 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::ForceIPv4=true -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::ForceIPv4=true install -y --no-install-recommends libmpv-dev ffmpeg gifsicle libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev \
             libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev file \
             libavformat-dev libavcodec-dev libavutil-dev ocl-icd-opencl-dev opencl-clhpp-headers \
             rpm desktop-file-utils
