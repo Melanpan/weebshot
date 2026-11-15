@@ -102,11 +102,6 @@ robocopy exit code is not checked either.
 
 Fix: start the script with `chcp 65001 >nul`. This one needs testing on Windows.
 
-Separately, `install()` (`:230`) uses the fixed name `weebshot-update` in the shared temp
-directory, removing and recreating it. On a multi-user machine another user can pre-create
-or symlink that path. `export::Scratch` already creates unique 0700 directories and could
-be reused.
-
 ### 10. Smaller issues
 
 - **Dropped subtitle files are opened as video.** `handle_input`

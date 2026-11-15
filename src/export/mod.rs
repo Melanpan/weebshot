@@ -373,6 +373,7 @@ pub struct TempFiles {
 
 pub struct Scratch {
     pub path: PathBuf,
+    remove_on_drop: bool,
 }
 
 impl Scratch {
@@ -392,13 +393,24 @@ impl Scratch {
         builder
             .create(&path)
             .with_context(|| format!("Could not create {}", path.display()))?;
-        Ok(Self { path })
+        Ok(Self {
+            path,
+            remove_on_drop: true,
+        })
+    }
+
+    /// Transfer cleanup to an external helper that must outlive this process.
+    pub fn keep(mut self) -> PathBuf {
+        self.remove_on_drop = false;
+        self.path.clone()
     }
 }
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        if self.remove_on_drop {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
     }
 }
 

@@ -10,7 +10,7 @@ use std::thread;
 use crossbeam_channel::{Receiver, bounded};
 use eframe::egui;
 
-use crate::export::hide_console;
+use crate::export::{Scratch, hide_console};
 use crate::log;
 
 /// `owner/name` on GitHub, from Cargo.toml's `repository`.
@@ -227,22 +227,24 @@ fn install(release: &Release) -> Result<(), String> {
         .download
         .as_deref()
         .ok_or("this release has no download for your platform")?;
-    let work = std::env::temp_dir().join("weebshot-update");
-    let _ = std::fs::remove_dir_all(&work);
-    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let work = update_workspace(&std::env::temp_dir())?;
 
     if cfg!(windows) {
-        install_windows(url, &work)
+        install_windows(url, work)
     } else if let Some(appimage) = std::env::var_os("APPIMAGE") {
-        install_appimage(url, &work, Path::new(&appimage))
+        install_appimage(url, &work.path, Path::new(&appimage))
     } else {
         Err("self-update only works for the Windows build and the AppImage".into())
     }
 }
 
+fn update_workspace(parent: &Path) -> Result<Scratch, String> {
+    Scratch::new(parent, 0).map_err(|e| format!("couldn't create update workspace: {e:#}"))
+}
+
 /// Download the zip, unpack it, and hand over to a small script that waits for us to exit,
 /// copies the new files over the installation and starts it again.
-fn install_windows(url: &str, work: &Path) -> Result<(), String> {
+fn install_windows(url: &str, work: Scratch) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("can't find the install folder")?;
     let probe = dir.join(".weebshot-write-test");
@@ -254,9 +256,9 @@ fn install_windows(url: &str, work: &Path) -> Result<(), String> {
     })?;
     let _ = std::fs::remove_file(&probe);
 
-    let zip = work.join("update.zip");
+    let zip = work.path.join("update.zip");
     download(url, &zip)?;
-    let unpacked = work.join("files");
+    let unpacked = work.path.join("files");
     std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
     let mut tar = Command::new(r"C:\Windows\System32\tar.exe");
     tar.arg("-xf").arg(&zip).arg("-C").arg(&unpacked);
@@ -266,24 +268,29 @@ fn install_windows(url: &str, work: &Path) -> Result<(), String> {
         return Err("the downloaded update looks broken".into());
     }
 
-    let script = work.join("apply-update.cmd");
-    let body = windows_script(std::process::id(), &unpacked, dir);
+    let script = work.path.join("apply-update.cmd");
+    let body = windows_script(std::process::id(), &work.path, dir);
     std::fs::write(&script, body).map_err(|e| e.to_string())?;
     let mut cmd = Command::new("cmd.exe");
     cmd.arg("/C").arg(&script);
     hide_console(&mut cmd);
     cmd.spawn().map_err(|e| e.to_string())?;
+    // The helper needs its script and unpacked files after this process exits.
+    // Until spawn succeeds, the guard cleans up every failure automatically.
+    work.keep();
     Ok(())
 }
 
-fn windows_script(pid: u32, from: &Path, to: &Path) -> String {
+fn windows_script(pid: u32, work: &Path, to: &Path) -> String {
     format!(
         "@echo off\r\n\
          :wait\r\n\
          tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n\
          robocopy \"{from}\" \"{to}\" /E /NFL /NDL /NJH /NJS /NP >nul\r\n\
-         start \"\" \"{exe}\"\r\n",
-        from = from.display(),
+         start \"\" \"{exe}\"\r\n\
+         rmdir /S /Q \"{work}\"\r\n",
+        work = work.display(),
+        from = work.join("files").display(),
         to = to.display(),
         exe = to.join("weebshot.exe").display(),
     )
@@ -344,16 +351,106 @@ mod tests {
         assert!(r.download.is_some());
     }
 
+    #[test]
+    fn windows_script_waits_copies_restarts_and_cleans_up() {
+        let work = Path::new("update workspace");
+        let to = Path::new("install directory");
+        let s = windows_script(1234, work, to);
+        let copy = format!(
+            r#"robocopy "{}" "{}" /E"#,
+            work.join("files").display(),
+            to.display()
+        );
+        let restart = format!(r#"start "" "{}""#, to.join("weebshot.exe").display());
+        let cleanup = format!(r#"rmdir /S /Q "{}""#, work.display());
+        assert!(s.contains("PID eq 1234"));
+        let copy_at = s.find(&copy).unwrap();
+        let restart_at = s.find(&restart).unwrap();
+        let cleanup_at = s.find(&cleanup).unwrap();
+        assert!(s.find(":wait").unwrap() < copy_at);
+        assert!(copy_at < restart_at && restart_at < cleanup_at);
+        // The self-deleting cleanup must be the last command in the batch file.
+        assert!(s.ends_with(&(cleanup + "\r\n")));
+    }
+
     #[cfg(windows)]
     #[test]
-    fn windows_script_waits_copies_restarts() {
-        let s = windows_script(
-            1234,
-            Path::new(r"C:\tmp\files"),
-            Path::new(r"C:\apps\weebshot"),
+    fn windows_helper_can_delete_its_own_workspace() {
+        let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let work = update_workspace(&root.path).unwrap();
+        let script = work.path.join("apply-update.cmd");
+        let body = windows_script(1234, &work.path, &root.path);
+        // Exercise the actual final command without replacing or restarting an app.
+        let cleanup = body.lines().last().unwrap();
+        std::fs::write(&script, format!("@echo off\r\n{cleanup}\r\n")).unwrap();
+        let path = work.keep();
+        let output = Command::new("cmd.exe")
+            .args(["/D", "/C"])
+            .arg(&script)
+            .current_dir(&root.path)
+            .output()
+            .unwrap();
+        assert!(
+            !path.exists(),
+            "helper did not clean up: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
-        assert!(s.contains("PID eq 1234"));
-        assert!(s.contains(r#"robocopy "C:\tmp\files" "C:\apps\weebshot" /E"#));
-        assert!(s.contains(r#"start "" "C:\apps\weebshot\weebshot.exe""#));
+    }
+
+    #[test]
+    fn update_workspaces_are_isolated_and_cleaned_up() {
+        let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let legacy = root.path.join("weebshot-update");
+        std::fs::create_dir(&legacy).unwrap();
+        let sentinel = legacy.join("unrelated.txt");
+        std::fs::write(&sentinel, "keep").unwrap();
+        let first = update_workspace(&root.path).unwrap();
+        let second = update_workspace(&root.path).unwrap();
+        assert_ne!(first.path, second.path);
+        let first_path = first.path.clone();
+        let second_path = second.path.clone();
+        std::fs::write(first.path.join("partial.zip"), "partial download").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&first.path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        drop(first);
+        assert!(!first_path.exists());
+        assert!(second_path.exists());
+        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "keep");
+        drop(second);
+        assert!(!second_path.exists());
+    }
+
+    #[test]
+    fn helper_handoff_keeps_workspace_until_explicit_cleanup() {
+        let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let work = update_workspace(&root.path).unwrap();
+        let script = work.path.join("apply-update.cmd");
+        std::fs::write(&script, "helper").unwrap();
+        let path = work.keep();
+        assert_eq!(std::fs::read_to_string(&script).unwrap(), "helper");
+        std::fs::remove_dir_all(&path).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_workspace_does_not_follow_legacy_symlink() {
+        let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let victim = root.path.join("victim");
+        std::fs::create_dir(&victim).unwrap();
+        let sentinel = victim.join("unrelated.txt");
+        std::fs::write(&sentinel, "keep").unwrap();
+        std::os::unix::fs::symlink(&victim, root.path.join("weebshot-update")).unwrap();
+        let work = update_workspace(&root.path).unwrap();
+        std::fs::write(work.path.join("update.zip"), "download").unwrap();
+        drop(work);
+        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "keep");
+        assert!(!victim.join("update.zip").exists());
     }
 }
