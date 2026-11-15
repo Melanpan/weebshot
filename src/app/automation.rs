@@ -161,6 +161,10 @@ impl App {
                 .map_err(|e| format!("{e:#}"));
             let _ = pending.reply.send(result);
         }
+        self.sync_automation_jobs();
+        ctx.request_repaint_after(Duration::from_millis(50));
+    }
+    pub(super) fn sync_automation_jobs(&mut self) {
         if let Some(service) = &self.automation.service {
             for (id, state, cancel) in service.snapshots() {
                 let view_id = *self.automation.mirrored.entry(id).or_insert_with(|| {
@@ -208,7 +212,6 @@ impl App {
                 }
             }
         }
-        ctx.request_repaint_after(Duration::from_millis(50));
     }
     fn automation_state(&self) -> Value {
         json!({"output_base_directory":std::env::current_dir().ok(),"media_revision":self.automation.media_revision,"ffmpeg_path":self.tools.ffmpeg,"gui":true,"media":self.player.file,"position_seconds":self.player.time,"duration_seconds":self.player.duration,"fps":self.player.fps,"paused":self.player.paused,"in_seconds":self.in_point,"out_seconds":self.out_point,"tracks":self.automation_tracks(),"settings":mcp::export_settings(&self.settings),"preparing":self.automation.prepare.is_some(),"automation_error":self.automation.error,"jobs":self.jobs.iter().map(|j|json!({"job_id":j.id,"output":j.output,"progress":j.progress,"status":match j.state{JobState::Queued=>"queued",JobState::Running{..}=>"running",JobState::Done=>"done",JobState::Failed(_)=>"failed"}})).collect::<Vec<_>>()})

@@ -14,107 +14,10 @@ settings UI, the keymap, and the native Anime4K helper.
 
 ## Bugs
 
-Ordered roughly by impact; original finding numbers are retained.
-
-### 2. Editing multiline subtitles flattens line breaks
-
-[`src/subs.rs`](../../src/subs.rs)
-
-The inline editor works on the stripped display text, where `\N` has become a
-space. Editing a two-line cue flattens it to one line, in addition to the documented loss
-of override tags on edited lines.
-
-### 3. Timecode display and parsing disagree at 23.976 fps
-
-[`src/util.rs:33`](../../src/util.rs) and `:64`
-
-`fmt_timecode` converts the time to a frame number and divides by the rounded rate (24),
-which is non-drop-frame timecode. `parse_position` reads `HH:MM:SS:FF` as real seconds
-plus `FF / 24`. The two are not inverses for fractional rates: at 3600 s the display reads
-`00:59:56:10`, and typing that back seeks to 3596.4 s, 3.6 s early.
-
-Fix: in the four-field case, compute the frame number
-(`((h * 3600 + m * 60 + s) * round(fps) + f)`) and divide by the real `fps`. Add a
-round-trip test at 24000/1001.
-
-### 4. A pending exact seek can be downgraded
-
-[`src/player.rs:602`](../../src/player.rs)
-
-The comment says a precise request must not be replaced by a later keyframe seek to the
-same position. The code overwrites `pending_seek` unconditionally. Either implement the
-rule (keep `exact` when the target matches the pending one) or remove the comment.
-
-Two neighbouring gaps in the same queue: `seek_relative` and single-frame stepping send
-their command directly, so a queued `pending_seek` dispatched afterwards overrides them.
-
-### 5. Files mpv cannot open fail silently
-
-[`src/player.rs:306`](../../src/player.rs), [`src/app/mod.rs:327`](../../src/app/mod.rs)
-
-`loadfile` succeeds as soon as the command is accepted. `MPV_EVENT_END_FILE` is never
-handled, so a corrupt or non-video file becomes the current file, is pushed to the recent
-list, and shows a blank viewer with no message.
-
-Fix: handle `END_FILE` with reason `error` in `poll()`, surface it through `App::error`,
-and only call `push_recent` after `FILE_LOADED`.
-
-### 6. `open()` does not stop the shuttle or play-a-line
-
-[`src/app/mod.rs:327`](../../src/app/mod.rs)
-
-`close()` calls `stop_shuttle()` and clears `play_until`; `open()` does neither. Opening a
-file while reverse-shuttling keeps issuing seeks from the previous file's `reverse_pos`,
-and a pending play-a-line stop time carries over.
-
-### 7. The waveform can desync on an odd-length read
-
-[`src/waveform.rs:70`](../../src/waveform.rs)
-
-The decoder reads 16-bit samples from a pipe and processes `buf[..n - n % 2]`. If a read
-returns an odd byte count, the last byte is dropped rather than carried, and every later
-sample is shifted by one byte into noise. Pipe reads normally return even counts on Linux,
-so this is rare there and more plausible on Windows.
-
-Fix: keep the odd byte and prepend it to the next read.
-
-### 8. Quitting mid-export leaves staging directories behind
-
-[`src/app/mod.rs:1623`](../../src/app/mod.rs), [`src/export/mod.rs:700`](../../src/export/mod.rs)
-
-`on_exit` cancels a running stitch and waits for it, but does nothing for running exports.
-The worker thread dies with the process, `Scratch::drop` never runs, and the hidden
-`.weebshot-<pid>-<id>-<n>` folder next to the output stays. With Anime4K it holds the
-FFV1 intermediates, which run to gigabytes.
-
-Fix: set every active job's cancel flag in `on_exit` and give the runner the same short
-grace period the stitch gets. A startup sweep that removes `.weebshot-*` folders whose PID
-is no longer running would also cover crashes and kills.
-
-### 9. Windows self-update likely fails for non-ASCII user names
-
-[`src/update.rs:279`](../../src/update.rs)
-
-The helper `.cmd` is written as UTF-8 and contains paths under `%TEMP%`, which is inside
-the user profile. `cmd.exe` reads batch files in the OEM code page, so a profile path with
-non-ASCII characters is mangled, `robocopy` fails, and the old version restarts. The
-robocopy exit code is not checked either.
-
-Fix: start the script with `chcp 65001 >nul`. This one needs testing on Windows.
-
-### 10. Smaller issues
-
-- **Dropped subtitle files are opened as video.** `handle_input`
-  ([`src/app/mod.rs:1317`](../../src/app/mod.rs)) passes any dropped file to `open()`. A
-  file with a `SUBTITLE_EXTENSIONS` extension should go to `player.add_sub` instead.
-- **Stale thumbnail request.** `Thumbs::request`
-  ([`src/thumbs.rs:256`](../../src/thumbs.rs)) returns early when the view is wider than
-  `MAX_DETAIL_SPAN` but leaves an earlier `want` in place, so a detail decode still starts
-  150 ms later for a range that is no longer shown. Clear `want` on that path.
-- **Output-exists check happens after the encode.** `run_job`
-  ([`src/export/mod.rs:720`](../../src/export/mod.rs)) only refuses an existing output once
-  the whole encode has finished. The GUI picks a free name up front, so this mainly
-  affects explicit paths from MCP; checking before the first step as well saves the work.
+All bugs listed in this review have fixes in the source. Native Windows verification
+of the updater's UTF-8 paths, copy-failure handling and helper cleanup remains pending.
+Normal exit cancels export jobs and gives workers a two-second cleanup grace period;
+forced termination and crashes can still leave staging directories behind.
 
 ## Optimizations
 
@@ -195,8 +98,8 @@ sub-visibility toggle must be restored when that reply arrives rather than immed
   ([`src/thumbs.rs:213`](../../src/thumbs.rs)). An atlas would reduce texture count and
   draw calls if the timeline ever shows up in a profile.
 
-## Suggested order
+## Suggested optimization order
 
-1. Bugs 5, 6 and 8, which are small, contained fixes.
-2. Optimization 1, then 2.
-3. The rest as time allows; bug 9 needs a Windows machine.
+1. Parallelize stitch motion detection.
+2. Add build profiles.
+3. The remaining optimizations as time allows.

@@ -327,6 +327,8 @@ impl App {
     // ---- files ----------------------------------------------------------
 
     fn open(&mut self, path: &Path) {
+        self.stop_shuttle();
+        self.play_until = None;
         match self.player.load(path) {
             Ok(()) => {
                 self.automation.media_revision = self.automation.media_revision.wrapping_add(1);
@@ -340,7 +342,6 @@ impl App {
                 self.timeline = timeline::TimelineState::default();
                 // The preview zoom and pan framed the previous video.
                 self.reset_view_zoom();
-                self.settings.push_recent(path.to_path_buf());
             }
             Err(e) => self.error(format!("{e:#}")),
         }
@@ -1026,6 +1027,24 @@ impl App {
         }
     }
 
+    fn finish_jobs(&mut self) {
+        for job in &self.jobs {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
+        self.stitch.cancel();
+        // Drain completions through the normal handler so stitch events cannot
+        // swallow export completions. Workers reap children and drop staging guards.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.jobs_active() > 0 || self.stitch.progress().is_some() {
+            self.poll_jobs();
+            self.sync_automation_jobs();
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn jobs_active(&self) -> usize {
         self.jobs
             .iter()
@@ -1333,7 +1352,21 @@ impl App {
     fn handle_input(&mut self, ctx: &egui::Context) {
         let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
         if let Some(path) = dropped {
-            self.open(&path);
+            if path
+                .extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|ext| {
+                    SUBTITLE_EXTENSIONS
+                        .iter()
+                        .any(|known| ext.eq_ignore_ascii_case(known))
+                })
+            {
+                if let Err(e) = self.player.add_sub(&path) {
+                    self.error(format!("Could not load subtitles: {e:#}"));
+                }
+            } else {
+                self.open(&path);
+            }
         }
 
         // Shortcut recording belongs to the settings viewport. Never let those keys
@@ -1549,6 +1582,13 @@ impl eframe::App for App {
         // callback too, so GUI commands and asynchronous completions must be
         // drained here rather than depending on a visible repaint.
         self.player.poll();
+        if let Some(path) = self.player.take_loaded_file() {
+            self.settings.push_recent(path);
+        }
+        if let Some(error) = self.player.take_load_error() {
+            self.close();
+            self.error(error);
+        }
         self.poll_automation(ctx);
         self.poll_jobs();
         self.poll_screenshots();
@@ -1641,7 +1681,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
-        self.finish_stitch();
+        self.finish_jobs();
         self.player.hide_edited_subs();
         self.preview_subs = None;
         self.player.destroy_gl(gl);

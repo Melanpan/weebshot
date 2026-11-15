@@ -61,9 +61,10 @@ pub fn parse_position(s: &str, fps: f64) -> Option<f64> {
         [sec] => num(sec),
         [m, sec] => Some(num(m)? * 60.0 + num(sec)?),
         [h, m, sec] => Some(num(h)? * 3600.0 + num(m)? * 60.0 + num(sec)?),
-        [h, m, sec, f] if fps > 0.0 => {
-            Some(num(h)? * 3600.0 + num(m)? * 60.0 + num(sec)? + num(f)? / fps.round())
-        }
+        [h, m, sec, f] if fps > 0.0 => Some(
+            ((num(h)? * 3600.0 + num(m)? * 60.0 + num(sec)?) * fps.round().max(1.0) + num(f)?)
+                / fps,
+        ),
         _ => None,
     }
 }
@@ -172,6 +173,16 @@ mod tests {
         assert_eq!(frame_at(0.0, fps), 0);
         assert_eq!(frame_at(1001.0 / 24000.0 * 100.0, fps), 100);
         assert_eq!(fmt_timecode(1.5, 24.0), "00:00:01:12");
+    }
+
+    #[test]
+    fn fractional_timecodes_round_trip_to_the_same_frame() {
+        for fps in [24000.0 / 1001.0, 30000.0 / 1001.0, 60000.0 / 1001.0, 24.0] {
+            for time in [0.0, 1.5, 3599.99, 3600.0, 7200.25] {
+                let parsed = parse_position(&fmt_timecode(time, fps), fps).unwrap();
+                assert_eq!(frame_at(parsed, fps), frame_at(time, fps));
+            }
+        }
     }
 
     #[test]

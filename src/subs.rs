@@ -34,6 +34,14 @@ pub struct Cue {
     raw_text: String,
 }
 
+impl Cue {
+    /// Editable ASS text without override tags. Keep explicit line-break escapes so
+    /// the single-line editor can round-trip multiline dialogue (Enter saves).
+    pub fn edit_text(&self) -> String {
+        strip_ass_tags(&self.raw_text)
+    }
+}
+
 /// Owned preview file: the private directory is created exclusively, and rewrites
 /// use the original handle rather than following a path in the shared temp directory.
 /// Fields drop in declaration order, closing the file before removing its directory
@@ -173,8 +181,8 @@ impl CueLoader {
     pub fn set_text(&mut self, idx: usize, text: String) {
         if let Some(c) = self.cues.get_mut(idx) {
             c.text_edited = true;
-            c.raw_text = text.clone();
-            c.text = text;
+            c.raw_text = text.replace("\r\n", "\n").replace(['\r', '\n'], "\\N");
+            c.text = strip_ass(&c.raw_text);
             self.dirty = true;
         }
     }
@@ -294,7 +302,7 @@ fn fmt_ass_time(t: f64) -> String {
 }
 
 /// Visible text of an ASS event: override tags removed, `\N` as spaces.
-fn strip_ass(text: &str) -> String {
+fn strip_ass_tags(text: &str) -> String {
     let mut out = String::new();
     let mut in_tag = false;
     for c in text.chars() {
@@ -305,7 +313,12 @@ fn strip_ass(text: &str) -> String {
             _ => {}
         }
     }
-    out.replace("\\N", " ")
+    out
+}
+
+fn strip_ass(text: &str) -> String {
+    strip_ass_tags(text)
+        .replace("\\N", " ")
         .replace("\\n", " ")
         .replace("\\h", " ")
         .split_whitespace()
@@ -485,6 +498,18 @@ mod tests {
         assert_eq!(loader.cues[2].text, "Second, line here");
         assert_eq!(loader.cues[2].end, 25.0);
         assert_eq!(output(&loader), ASS);
+    }
+
+    #[test]
+    fn editing_multiline_text_preserves_line_breaks() {
+        let mut cues = loader(ASS);
+        let text = cues.cues[2].edit_text();
+        assert_eq!(text, "Second, line\\Nhere");
+        cues.set_text(2, text.replace("Second", "Edited"));
+        assert!(output(&cues).contains("Edited, line\\Nhere"));
+        assert_eq!(cues.cues[2].text, "Edited, line here");
+        cues.set_text(2, "First\nSecond".into());
+        assert!(output(&cues).contains("First\\NSecond"));
     }
 
     #[test]

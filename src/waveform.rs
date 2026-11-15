@@ -19,6 +19,22 @@ pub const PEAKS_PER_SEC: f64 = 200.0;
 const SAMPLE_RATE: u32 = 8000;
 const SAMPLES_PER_PEAK: usize = (SAMPLE_RATE as f64 / PEAKS_PER_SEC) as usize;
 
+/// Pipe reads need not end on a sample boundary.
+fn decode_samples(bytes: &[u8], pending: &mut Option<u8>, samples: &mut Vec<i16>) {
+    let mut bytes = bytes;
+    if let Some((&first, rest)) = bytes.split_first()
+        && let Some(low) = pending.take()
+    {
+        samples.push(i16::from_le_bytes([low, first]));
+        bytes = rest;
+    }
+    let (pairs, remainder) = bytes.as_chunks::<2>();
+    samples.extend(pairs.iter().map(|pair| i16::from_le_bytes(*pair)));
+    if let Some(&byte) = remainder.first() {
+        *pending = Some(byte);
+    }
+}
+
 pub struct Waveform {
     file: PathBuf,
     ff_index: i64,
@@ -57,6 +73,7 @@ impl Waveform {
             // A few seconds of audio per read, sent to the UI as it arrives.
             let mut buf = vec![0u8; SAMPLES_PER_PEAK * 2 * 1000];
             let mut carry: Vec<i16> = Vec::new();
+            let mut pending_byte = None;
             let mut total = 0usize;
             loop {
                 if cancel2.load(Ordering::Relaxed) {
@@ -67,13 +84,7 @@ impl Waveform {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
-                carry.extend(
-                    buf[..n - n % 2]
-                        .as_chunks::<2>()
-                        .0
-                        .iter()
-                        .map(|b| i16::from_le_bytes(*b)),
-                );
+                decode_samples(&buf[..n], &mut pending_byte, &mut carry);
                 let whole = carry.len() / SAMPLES_PER_PEAK * SAMPLES_PER_PEAK;
                 let peaks: Vec<f32> = carry[..whole]
                     .as_chunks::<SAMPLES_PER_PEAK>()
@@ -146,5 +157,25 @@ impl Waveform {
 impl Drop for Waveform {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn sample_decoding_survives_odd_and_empty_reads() {
+        let expected = [i16::MIN, -12345, -1, 0, 1, 12345, i16::MAX];
+        let bytes: Vec<_> = expected.iter().flat_map(|s| s.to_le_bytes()).collect();
+        for size in 1..=bytes.len() {
+            let mut pending = None;
+            let mut samples = Vec::new();
+            for chunk in bytes.chunks(size) {
+                decode_samples(chunk, &mut pending, &mut samples);
+                decode_samples(&[], &mut pending, &mut samples);
+            }
+            assert_eq!(samples, expected, "chunk size {size}");
+            assert!(pending.is_none());
+        }
     }
 }

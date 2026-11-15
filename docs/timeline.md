@@ -76,6 +76,9 @@ selects it (shown with an outline); [Delete](key:DeleteSubtitleLine) removes whi
 selected, so you don't have to right-click for it every time. Selection is independent of the
 playhead, so it won't change out from under you if the video keeps playing.
 
+The text editor shows line breaks as `\N`; keep or insert that marker to preserve multiline
+dialogue. Press Enter to save, or Escape to cancel.
+
 To retime a line, drag its body to move it (the length stays the same) or drag an edge to change
 just its start or end.
 

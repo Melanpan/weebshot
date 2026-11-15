@@ -74,6 +74,10 @@ pub struct Player {
     mpv: &'static Mpv,
     gl: Arc<GlCell>,
     pub file: Option<PathBuf>,
+    file_entry: Option<i64>,
+    active_entry: Option<i64>,
+    loaded_file: Option<PathBuf>,
+    load_error: Option<String>,
     pub time: f64,
     pub duration: f64,
     pub paused: bool,
@@ -199,6 +203,10 @@ impl Player {
                 target: None,
             }))),
             file: None,
+            file_entry: None,
+            active_entry: None,
+            loaded_file: None,
+            load_error: None,
             time: 0.0,
             duration: 0.0,
             paused: true,
@@ -240,6 +248,9 @@ impl Player {
             .map_err(|e| anyhow!("mpv could not open file: {e}"))?;
         log::info("player", format!("opening {}", path.display()));
         self.file = Some(path.to_path_buf());
+        self.file_entry = self.mpv.get_property::<i64>("playlist/0/id").ok();
+        self.loaded_file = None;
+        self.load_error = None;
         self.tracks.clear();
         self.chapters.clear();
         self.seek_in_flight = None;
@@ -278,6 +289,10 @@ impl Player {
     pub fn close(&mut self) {
         self.command_async(&["stop"]);
         self.file = None;
+        self.file_entry = None;
+        self.active_entry = None;
+        self.loaded_file = None;
+        self.load_error = None;
         self.tracks.clear();
         self.chapters.clear();
         self.time = 0.0;
@@ -294,10 +309,19 @@ impl Player {
         self.sid_before_edit = None;
     }
 
+    pub fn take_loaded_file(&mut self) -> Option<PathBuf> {
+        self.loaded_file.take()
+    }
+
+    pub fn take_load_error(&mut self) -> Option<String> {
+        self.load_error.take()
+    }
+
     /// Apply mpv's queued events. Call once per UI frame.
     pub fn poll(&mut self) {
         use libmpv2_sys as sys;
         let mut file_loaded = false;
+        let mut load_error = None;
         let mut reload_tracks = false;
         loop {
             // Read events through the C API: libmpv2's wrapper reports "property became
@@ -341,7 +365,33 @@ impl Player {
                     // Drain old events before dispatching the next queued target.
                     self.seek_in_flight = None;
                 }
-                sys::mpv_event_id_MPV_EVENT_FILE_LOADED => file_loaded = true,
+                sys::mpv_event_id_MPV_EVENT_START_FILE => {
+                    let start = unsafe { &*(ev.data as *const sys::mpv_event_start_file) };
+                    self.active_entry = Some(start.playlist_entry_id);
+                }
+                sys::mpv_event_id_MPV_EVENT_FILE_LOADED => {
+                    file_loaded = self.file.is_some()
+                        && self
+                            .file_entry
+                            .is_none_or(|id| Some(id) == self.active_entry);
+                }
+                sys::mpv_event_id_MPV_EVENT_END_FILE => {
+                    let end = unsafe { &*(ev.data as *const sys::mpv_event_end_file) };
+                    if end.reason == sys::mpv_end_file_reason_MPV_END_FILE_REASON_ERROR
+                        && self.file.is_some()
+                        && self.file_entry.is_none_or(|id| id == end.playlist_entry_id)
+                    {
+                        let reason = unsafe { CStr::from_ptr(sys::mpv_error_string(end.error)) };
+                        load_error = Some(format!(
+                            "Could not open {}: {}",
+                            self.file
+                                .as_deref()
+                                .unwrap_or_else(|| Path::new("video"))
+                                .display(),
+                            reason.to_string_lossy()
+                        ));
+                    }
+                }
                 sys::mpv_event_id_MPV_EVENT_LOG_MESSAGE => {
                     let m = unsafe { &*(ev.data as *const sys::mpv_event_log_message) };
                     let text = |p| unsafe { CStr::from_ptr(p) }.to_string_lossy();
@@ -358,6 +408,12 @@ impl Player {
                 }
                 _ => {}
             }
+        }
+
+        if let Some(error) = load_error {
+            self.close();
+            self.load_error = Some(error);
+            return;
         }
 
         if self
@@ -381,7 +437,18 @@ impl Player {
             }
         }
         if file_loaded {
+            if !self
+                .tracks
+                .iter()
+                .any(|track| track.kind == TrackKind::Video)
+            {
+                let path = self.file.clone().unwrap_or_default();
+                self.close();
+                self.load_error = Some(format!("No video track found in {}", path.display()));
+                return;
+            }
             self.on_file_loaded();
+            self.loaded_file = self.file.clone();
         }
         if self.seek_in_flight.is_none()
             && let Some((t, exact)) = self.pending_seek.take()
@@ -601,6 +668,10 @@ impl Player {
         let t = t.clamp(0.0, self.duration.max(0.0));
         if self.seek_in_flight.is_some() {
             // A precise request must not be downgraded by a later fast one for the same spot.
+            let exact = exact
+                || self
+                    .pending_seek
+                    .is_some_and(|(target, precise)| target == t && precise);
             self.pending_seek = Some((t, exact));
             return;
         }
@@ -620,6 +691,8 @@ impl Player {
     }
 
     pub fn seek_relative(&mut self, delta: f64) {
+        self.pending_seek = None;
+        self.reported_time = None;
         self.command_async(&["seek", &format!("{delta:.4}"), "relative+exact"]);
     }
 
@@ -627,8 +700,15 @@ impl Player {
     /// more is an exact seek to the target frame.
     pub fn step_frames(&mut self, n: i64) {
         match n {
-            1 => self.command_async(&["frame-step"]),
-            -1 => self.command_async(&["frame-back-step"]),
+            1 | -1 => {
+                self.pending_seek = None;
+                self.reported_time = None;
+                self.command_async(&[if n == 1 {
+                    "frame-step"
+                } else {
+                    "frame-back-step"
+                }]);
+            }
             0 => {}
             _ => {
                 let frame = (self.time * self.fps).round() + n as f64;
@@ -845,6 +925,108 @@ unsafe fn create_target(gl: &glow::Context, width: i32, height: i32) -> Result<T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_player() -> Player {
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_option("vo", "null")?;
+            init.set_option("ao", "null")?;
+            init.set_option("config", "no")?;
+            init.set_option("terminal", "no")?;
+            init.set_option("idle", "yes")?;
+            Ok(())
+        })
+        .unwrap();
+        Player::with_handles(Box::leak(Box::new(mpv)), None)
+    }
+
+    #[test]
+    fn newer_seek_actions_preserve_precision_and_supersede_pending_targets() {
+        let mut player = test_player();
+        player.duration = 100.0;
+        player.seek_in_flight = Some(Instant::now());
+        player.seek(20.0, true);
+        player.seek(20.0, false);
+        assert_eq!(player.pending_seek, Some((20.0, true)));
+        player.seek(30.0, false);
+        assert_eq!(player.pending_seek, Some((30.0, false)));
+        player.seek_relative(2.0);
+        assert!(player.pending_seek.is_none());
+        for step in [1, -1] {
+            player.seek(20.0, true);
+            player.step_frames(step);
+            assert!(player.pending_seek.is_none());
+        }
+    }
+
+    #[test]
+    fn failed_load_reports_error_instead_of_loaded_file() {
+        let root = crate::export::Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let path = root.path.join("corrupt.mkv");
+        std::fs::write(&path, "not a video").unwrap();
+        let mut player = test_player();
+        player.load(&path).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let error = loop {
+            player.poll();
+            assert!(player.take_loaded_file().is_none());
+            if let Some(error) = player.take_load_error() {
+                break error;
+            }
+            assert!(Instant::now() < deadline, "missing load failure");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(error.contains("corrupt.mkv"), "{error}");
+        assert!(player.file.is_none());
+        assert!(player.pending_seek.is_none());
+    }
+
+    #[test]
+    fn successful_load_is_reported_only_after_file_loaded() {
+        let root = crate::export::Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let path = root.path.join("video.mkv");
+        let output = std::process::Command::new(crate::export::find_tool("ffmpeg"))
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=s=16x16:r=1:d=1",
+                "-c:v",
+                "ffv1",
+            ])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut player = test_player();
+        let broken = root.path.join("earlier-corrupt.mkv");
+        std::fs::write(&broken, "not a video").unwrap();
+        player.load(&broken).unwrap();
+        // Leave its failure in mpv's event queue, then replace it before polling.
+        std::thread::sleep(Duration::from_millis(50));
+        player.load(&path).unwrap();
+        assert!(player.file_entry.is_some());
+        assert!(player.take_loaded_file().is_none());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            player.poll();
+            assert!(player.take_load_error().is_none());
+            if let Some(loaded) = player.take_loaded_file() {
+                assert_eq!(loaded, path);
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing FILE_LOADED");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(player.take_loaded_file().is_none());
+        player.close();
+    }
 
     /// Exercise the real decoder and Player event/seek queue without a GUI.
     /// Run under an external timeout to catch decoder/driver hangs as well.

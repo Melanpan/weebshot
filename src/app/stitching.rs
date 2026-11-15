@@ -434,23 +434,6 @@ fn preview_window<'a>(ctx: &egui::Context, open: &'a mut bool) -> egui::Window<'
 }
 
 impl App {
-    pub(super) fn finish_stitch(&mut self) {
-        self.stitch.cancel();
-        // Give the worker time to reap its decoder and remove scratch files on
-        // normal application exit. Queued jobs have no scratch files yet.
-        let started = std::time::Instant::now();
-        while self.stitch.progress().is_some()
-            && started.elapsed() < std::time::Duration::from_secs(2)
-        {
-            if let Ok(event) = self
-                .runner
-                .events
-                .recv_timeout(std::time::Duration::from_millis(25))
-            {
-                let _ = self.stitch_event(event);
-            }
-        }
-    }
     pub(super) fn start_stitch(&mut self, ctx: &egui::Context, selection: bool) {
         if self.stitch.id.is_some() {
             self.stitch.open = true;

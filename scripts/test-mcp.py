@@ -290,7 +290,21 @@ def gui(binary, directory, video, env, log):
     finally:
         disabled.terminate()
         disabled.wait(timeout=10)
-    settings.write_text('{"app": "(mcp_enabled:true,check_updates:false,sounds:false,hwdec:false)"}')
+    # Gate only the final GUI export, leaving probes and earlier workflows real.
+    freeze = directory/"freeze-export"
+    encoder_pid = directory/"gui-encoder.pid"
+    wrapper = directory/"test-ffmpeg"
+    real_ffmpeg = shutil.which("ffmpeg")
+    assert real_ffmpeg
+    wrapper.write_text(
+        f"#!{sys.executable}\nimport os, sys, time\nfrom pathlib import Path\n"
+        f"if Path({str(freeze)!r}).exists() and '-filter_complex' in sys.argv:\n"
+        f"    Path({str(encoder_pid)!r}).write_text(str(os.getpid()))\n"
+        "    time.sleep(30)\n"
+        f"os.execv({real_ffmpeg!r}, [{real_ffmpeg!r}] + sys.argv[1:])\n")
+    wrapper.chmod(0o700)
+    config = f'(mcp_enabled:true,check_updates:false,sounds:false,hwdec:false,ffmpeg_path:Some({json.dumps(str(wrapper))}))'
+    settings.write_text(json.dumps({"app": config}))
     # A killed process leaves the filesystem socket behind. Enabling MCP at
     # startup must recover it without requiring manual deletion or a UI toggle.
     import socket as unix_socket
@@ -394,8 +408,27 @@ def gui(binary, directory, video, env, log):
         exercise(client,directory,gui=True)
         from test_mcp_reports import exercise as report
         report(client,log)
-        app.terminate()
-        app.wait(timeout=10)
+        client.tool("gui_prepare_export", {"media": str(video), "in_seconds": .5,
+                    "out_seconds": 2, "replace_selection": True,
+                    "settings": {"clip_format": "Mp4", "clip_subs": "Off"}})
+        deadline = time.monotonic()+10
+        while client.tool("gui_get_state")["preparing"]:
+            assert time.monotonic()<deadline
+            time.sleep(.05)
+        freeze.touch()
+        subprocess.run(["xdotool", "windowactivate", "--sync", window, "key", "Escape", "e"],
+                       env=gui_env, check=True)
+        deadline = time.monotonic()+5
+        while not encoder_pid.exists():
+            assert time.monotonic()<deadline, "GUI export did not start"
+            time.sleep(.02)
+        pid = int(encoder_pid.read_text())
+        staging = list(directory.glob(f".weebshot-{app.pid}-*"))
+        assert staging, "export did not create staging files"
+        subprocess.run(["xdotool", "key", "ctrl+q"], env=gui_env, check=True)
+        assert app.wait(timeout=10) == 0
+        assert not Path(f"/proc/{pid}").exists(), "GUI left its encoder running"
+        assert not any(path.exists() for path in staging), "GUI left export staging files"
         client.tool("gui_get_state", error=True)
         client.close()
     finally:

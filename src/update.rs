@@ -272,7 +272,7 @@ fn install_windows(url: &str, work: Scratch) -> Result<(), String> {
     let body = windows_script(std::process::id(), &work.path, dir);
     std::fs::write(&script, body).map_err(|e| e.to_string())?;
     let mut cmd = Command::new("cmd.exe");
-    cmd.arg("/C").arg(&script);
+    cmd.args(["/D", "/C"]).arg(&script);
     hide_console(&mut cmd);
     cmd.spawn().map_err(|e| e.to_string())?;
     // The helper needs its script and unpacked files after this process exits.
@@ -284,9 +284,16 @@ fn install_windows(url: &str, work: Scratch) -> Result<(), String> {
 fn windows_script(pid: u32, work: &Path, to: &Path) -> String {
     format!(
         "@echo off\r\n\
+         setlocal DisableDelayedExpansion\r\n\
+         chcp 65001 >nul\r\n\
          :wait\r\n\
          tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n\
          robocopy \"{from}\" \"{to}\" /E /NFL /NDL /NJH /NJS /NP >nul\r\n\
+         if errorlevel 8 (\r\n\
+         powershell.exe -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Weebshot could not copy the update. Please download and install it manually.', 'Weebshot update failed') | Out-Null\"\r\n\
+         rmdir /S /Q \"{work}\"\r\n\
+         exit /b 1\r\n\
+         )\r\n\
          start \"\" \"{exe}\"\r\n\
          rmdir /S /Q \"{work}\"\r\n",
         work = work.display(),
@@ -364,9 +371,14 @@ mod tests {
         let restart = format!(r#"start "" "{}""#, to.join("weebshot.exe").display());
         let cleanup = format!(r#"rmdir /S /Q "{}""#, work.display());
         assert!(s.contains("PID eq 1234"));
+        assert!(s.find("chcp 65001").unwrap() < s.find(":wait").unwrap());
+        let failure = s.find("if errorlevel 8 (").unwrap();
+        assert!(s.find(&copy).unwrap() < failure);
+        assert!(failure < s.find("exit /b 1").unwrap());
+        assert!(s.find("exit /b 1").unwrap() < s.find(&restart).unwrap());
         let copy_at = s.find(&copy).unwrap();
         let restart_at = s.find(&restart).unwrap();
-        let cleanup_at = s.find(&cleanup).unwrap();
+        let cleanup_at = s.rfind(&cleanup).unwrap();
         assert!(s.find(":wait").unwrap() < copy_at);
         assert!(copy_at < restart_at && restart_at < cleanup_at);
         // The self-deleting cleanup must be the last command in the batch file.
@@ -395,6 +407,16 @@ mod tests {
             "helper did not clean up: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn windows_script_selects_utf8_before_non_ascii_paths() {
+        let work = Path::new("Users/Zoë/update");
+        let to = Path::new("Users/Zoë/Weebshot");
+        let script = windows_script(1234, work, to);
+        assert!(script.find("chcp 65001").unwrap() < script.find("Zoë").unwrap());
+        assert!(script.contains(&work.join("files").display().to_string()));
+        assert!(script.contains(&to.join("weebshot.exe").display().to_string()));
     }
 
     #[test]

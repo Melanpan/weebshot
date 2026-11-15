@@ -717,7 +717,9 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
                             .id_salt(("subtitle_edit", idx))
                             .font(FontId::proportional(11.0))
                             .desired_width(r.width().max(10.0));
-                        let out = ui.put(r, edit);
+                        let out = ui.put(r, edit).on_hover_text(
+                            "Use \\N for a line break. Enter saves; Escape cancels.",
+                        );
                         // `lost_focus()` already covers Enter (TextEdit's own
                         // surrender_focus) and Escape (egui's global clear-focus-on-Escape)
                         // — the canonical `lost_focus() && key_pressed(Enter)` pattern.
@@ -1189,7 +1191,7 @@ fn show(ui: &mut egui::Ui, st: &mut TimelineState, d: &Data) -> Vec<Event> {
         }
         if let Some((idx, cue)) = menu_cue {
             if ui.button("Edit text…").clicked() {
-                st.editing_cue = Some((idx, cue.text.clone()));
+                st.editing_cue = Some((idx, cue.edit_text()));
             }
             if ui.button("Delete subtitle").clicked() {
                 events.push(Event::DeleteCue(idx));

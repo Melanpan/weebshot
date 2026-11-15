@@ -705,6 +705,9 @@ fn run_job(
     cancel: &AtomicBool,
     report: impl Fn(f32, Option<f32>, &'static str),
 ) -> Result<()> {
+    if job.output.exists() {
+        bail!("Output already exists: {}", job.output.display());
+    }
     // Small scratch files (edited subtitles) go to the temp dir; the staging dir next
     // to the output holds the encode itself and every large intermediate: pass logs,
     // the GIF palette and above all the Anime4K FFV1 videos, which run to gigabytes
@@ -1105,6 +1108,37 @@ mod tests {
         run_job(&tools(), id, job, &AtomicBool::new(false), |_, _, _| {})
             .unwrap_or_else(|e| panic!("{}: {e:#}", job.output.display()));
         std::fs::metadata(&job.output).unwrap().len()
+    }
+
+    #[test]
+    fn existing_output_is_rejected_before_starting_an_encoder() {
+        let root = Scratch::new(&std::env::temp_dir(), 0).unwrap();
+        let j = job(
+            &root.path.join("input.mkv"),
+            ClipFormat::Mp4,
+            false,
+            "existing.mp4",
+        );
+        std::fs::write(&j.output, b"original").unwrap();
+        let tools = Tools {
+            ffmpeg: root.path.join("missing-encoder"),
+            gifsicle: None,
+        };
+        let error = run_job(&tools, 0, &j, &AtomicBool::new(false), |_, _, _| {
+            panic!("encoder started")
+        })
+        .unwrap_err();
+        assert!(
+            error.to_string().starts_with("Output already exists:"),
+            "{error:#}"
+        );
+        assert_eq!(std::fs::read(&j.output).unwrap(), b"original");
+        assert_eq!(
+            std::fs::read_dir(j.output.parent().unwrap())
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     /// End-to-end encode of every format through a real ffmpeg.

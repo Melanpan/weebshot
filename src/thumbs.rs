@@ -254,6 +254,7 @@ impl Thumbs {
     /// The timeline shows `[a, b]` with one thumbnail every `spacing` seconds.
     pub fn request(&mut self, a: f64, b: f64, spacing: f64) {
         if b - a > MAX_DETAIL_SPAN {
+            self.want = None;
             return;
         }
         let spacing = spacing.max(1.0 / self.fps);
@@ -262,6 +263,7 @@ impl Thumbs {
             && b <= db
             && spacing >= ds * 0.9
         {
+            self.want = None;
             return; // already decoded at this density or finer
         }
         let want = (a, b, spacing);
