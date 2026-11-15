@@ -14,11 +14,20 @@ fn main() {
         let mpv_dir = root.join("vendor/mpv");
         println!("cargo:rerun-if-changed=vendor/mpv");
         println!("cargo:rustc-link-search=native={}", mpv_dir.display());
-        // OUT_DIR is target/<profile>/build/<pkg>-<hash>/out.
-        if let Some(profile_dir) = out_dir.ancestors().nth(3) {
-            let dll = mpv_dir.join("libmpv-2.dll");
-            if dll.exists() {
-                let _ = std::fs::copy(&dll, profile_dir.join("libmpv-2.dll"));
+        // Cargo layouts differ across versions. Locate the profile through its
+        // build directory rather than a fixed number of parents. Also stage the
+        // DLL in OUT_DIR: Cargo adds in-target native link search paths to the
+        // runtime library path for tests, whose executables live elsewhere.
+        let dll = mpv_dir.join("libmpv-2.dll");
+        if dll.exists() {
+            std::fs::copy(&dll, out_dir.join("libmpv-2.dll")).unwrap();
+            println!("cargo:rustc-link-search=native={}", out_dir.display());
+            if let Some(profile_dir) = out_dir
+                .ancestors()
+                .find(|path| path.file_name().is_some_and(|name| name == "build"))
+                .and_then(std::path::Path::parent)
+            {
+                std::fs::copy(&dll, profile_dir.join("libmpv-2.dll")).unwrap();
             }
         }
     }
