@@ -14,8 +14,12 @@ settings UI, the keymap, and the native Anime4K helper.
 
 ## Bugs
 
-All bugs listed in this review have fixes in the source. Native Windows verification
-of the updater's UTF-8 paths, copy-failure handling and helper cleanup remains pending.
+All bugs listed in this review have fixes in the source. The native Windows regression
+`update::tests::windows_update_copies_restarts_and_handles_locked_files` exercises the
+actual updater helper: waiting for the parent, replacing files, restarting, handling a
+locked destination, and removing its workspace. Paths contain Japanese characters,
+spaces, and an apostrophe. The failure dialog is replaced with a recorder in this test;
+a manual end-to-end upgrade from the GUI remains unverified.
 Normal exit cancels export jobs and gives workers a two-second cleanup grace period;
 forced termination and crashes can still leave staging directories behind.
 

@@ -85,6 +85,10 @@ picks up the new images.
 cargo test
 ```
 
+Generated-media tests need FFmpeg on `PATH` (on Windows, for example,
+`choco install ffmpeg -y`). Windows CI installs it; the release workflow also runs
+tests with the bundled media tools and exercises the native Windows update helper.
+
 Unit tests cover ffmpeg command building (escaping, subtitles, GIF pipeline, 2-pass sizing),
 timecode parsing, subtitle parsing, the keymap, the timeline zoom maths, and the docs: every
 shortcut mentioned in `docs/` must match the default keymap, and `docs/shortcuts.md` must match the
