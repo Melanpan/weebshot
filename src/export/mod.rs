@@ -393,6 +393,11 @@ impl Scratch {
         builder
             .create(&path)
             .with_context(|| format!("Could not create {}", path.display()))?;
+        // Staging folders can land on the Desktop or in the output folder. Hidden, Explorer
+        // neither lists them nor opens them while an export runs, so it is less likely
+        // to hold a handle that turns our delete into an undeletable pending delete.
+        #[cfg(windows)]
+        hide(&path);
         Ok(Self {
             path,
             remove_on_drop: true,
@@ -408,9 +413,69 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        if self.remove_on_drop {
-            let _ = std::fs::remove_dir_all(&self.path);
+        if !self.remove_on_drop {
+            return;
         }
+        // On Windows another process (Explorer, an antivirus scanner, the indexer) can
+        // briefly hold a file in the folder open, so give it a moment before giving up.
+        let pauses = [25, 50, 100, 200].map(std::time::Duration::from_millis);
+        let remove = |path: &Path| std::fs::remove_dir_all(path);
+        if let Err(error) = remove_with_retry(&self.path, &pauses, remove, thread::sleep) {
+            log::warn(
+                "export",
+                format!("Could not remove {}: {error}", self.path.display()),
+            );
+        }
+    }
+}
+
+/// Call `remove` until it succeeds or the path is gone, pausing between attempts.
+fn remove_with_retry(
+    path: &Path,
+    pauses: &[std::time::Duration],
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+    mut pause: impl FnMut(std::time::Duration),
+) -> std::io::Result<()> {
+    let mut pauses = pauses.iter();
+    loop {
+        match remove(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => match pauses.next() {
+                Some(&delay) => pause(delay),
+                None => return Err(error),
+            },
+        }
+    }
+}
+
+/// Set the hidden attribute on a path; best effort.
+#[cfg(windows)]
+fn hide(path: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    const INVALID_FILE_ATTRIBUTES: u32 = u32::MAX;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileAttributesW(name: *const u16) -> u32;
+        fn SetFileAttributesW(name: *const u16, attributes: u32) -> i32;
+    }
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives both calls.
+    let hidden = unsafe {
+        let attributes = GetFileAttributesW(wide.as_ptr());
+        attributes != INVALID_FILE_ATTRIBUTES
+            && SetFileAttributesW(wide.as_ptr(), attributes | FILE_ATTRIBUTE_HIDDEN) != 0
+    };
+    if !hidden {
+        log::warn(
+            "export",
+            format!(
+                "Could not hide {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ),
+        );
     }
 }
 
@@ -1060,6 +1125,77 @@ fn save_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Error, ErrorKind};
+    use std::time::Duration;
+
+    const PAUSES: [Duration; 3] = [
+        Duration::from_millis(1),
+        Duration::from_millis(2),
+        Duration::from_millis(3),
+    ];
+
+    #[test]
+    fn remove_retries_until_the_folder_is_released() {
+        let mut calls = 0;
+        let mut slept = Vec::new();
+        let result = remove_with_retry(
+            Path::new("x"),
+            &PAUSES,
+            |_| {
+                calls += 1;
+                if calls < 3 {
+                    Err(Error::from(ErrorKind::PermissionDenied))
+                } else {
+                    Ok(())
+                }
+            },
+            |delay| slept.push(delay),
+        );
+        assert!(result.is_ok());
+        assert_eq!(calls, 3);
+        assert_eq!(slept, PAUSES[..2]);
+    }
+
+    #[test]
+    fn remove_gives_up_after_the_last_pause() {
+        let mut calls = 0;
+        let result = remove_with_retry(
+            Path::new("x"),
+            &PAUSES,
+            |_| {
+                calls += 1;
+                Err(Error::from(ErrorKind::PermissionDenied))
+            },
+            |_| {},
+        );
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
+        assert_eq!(calls, PAUSES.len() + 1);
+    }
+
+    #[test]
+    fn remove_treats_a_missing_folder_as_removed() {
+        let mut calls = 0;
+        let result = remove_with_retry(
+            Path::new("x"),
+            &PAUSES,
+            |_| {
+                calls += 1;
+                Err(Error::from(ErrorKind::NotFound))
+            },
+            |_| panic!("no pause expected"),
+        );
+        assert!(result.is_ok());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn scratch_folder_is_removed_on_drop() {
+        let scratch = Scratch::new(&std::env::temp_dir(), 777_001).unwrap();
+        let path = scratch.path.clone();
+        std::fs::write(path.join("palette.png"), b"x").unwrap();
+        drop(scratch);
+        assert!(!path.exists());
+    }
 
     fn sample() -> PathBuf {
         PathBuf::from(std::env::var("WEEBSHOT_SAMPLE").expect("set WEEBSHOT_SAMPLE"))
