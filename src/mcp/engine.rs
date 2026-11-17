@@ -19,9 +19,7 @@ use std::{
 };
 
 pub fn input_path(path: &str) -> Result<PathBuf> {
-    let path = Path::new(path)
-        .canonicalize()
-        .context("Media must be an existing local file")?;
+    let path = dunce::canonicalize(path).context("Media must be an existing local file")?;
     ensure!(path.is_file(), "Media must be a regular file");
     Ok(path)
 }
@@ -32,7 +30,7 @@ fn output_path(path: &str, base: Option<&str>) -> Result<(PathBuf, PathBuf)> {
             base.is_absolute(),
             "base_directory must be an absolute existing directory"
         );
-        base.canonicalize()
+        dunce::canonicalize(base)
             .with_context(|| format!("Base directory is unavailable: {}", base.display()))?
     } else {
         std::env::current_dir().context("Cannot determine the Weebshot working directory")?
@@ -50,7 +48,7 @@ fn output_path(path: &str, base: Option<&str>) -> Result<(PathBuf, PathBuf)> {
     };
     let name = path.file_name().context("Output must have a filename")?;
     let parent = path.parent().context("Output needs a parent directory")?;
-    let parent=parent.canonicalize().with_context(||format!("Output directory does not exist or cannot be accessed: {} (relative output base: {}; supply an absolute output or explicit base_directory)",parent.display(),base.display()))?;
+    let parent=dunce::canonicalize(parent).with_context(||format!("Output directory does not exist or cannot be accessed: {} (relative output base: {}; supply an absolute output or explicit base_directory)",parent.display(),base.display()))?;
     ensure!(
         parent.is_dir(),
         "Output parent is not a directory: {}",
